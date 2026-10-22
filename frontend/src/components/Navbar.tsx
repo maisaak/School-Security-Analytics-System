@@ -16,7 +16,6 @@ import {
   ShieldAlert,
   ShieldCheck,
   Upload,
-  UserCheck,
   Users,
   Video,
   X,
@@ -27,7 +26,6 @@ import { usePrefs } from "../prefs/PrefsContext";
 export type AppTab =
   | "dashboard"
   | "guard"
-  | "visitors"
   | "analytics"
   | "lab"
   | "training"
@@ -47,7 +45,6 @@ interface TabMeta {
 const TABS: TabMeta[] = [
   { id: "dashboard", label: "Мониторинг и инциденты", shortLabel: "Мониторинг", icon: Video, badge: "unack" },
   { id: "guard", label: "КПП, тревоги и видеостена", shortLabel: "КПП", icon: ShieldAlert, badge: "unack" },
-  { id: "visitors", label: "Гостевые пропуска", shortLabel: "Гости", icon: UserCheck },
   { id: "analytics", label: "Аналитика и отчёты", shortLabel: "Аналитика", icon: BarChart3 },
   { id: "lab", label: "Проверка медиа", shortLabel: "Медиа", icon: Upload },
   { id: "training", label: "Модели YOLO", shortLabel: "YOLO", icon: BrainCircuit },
