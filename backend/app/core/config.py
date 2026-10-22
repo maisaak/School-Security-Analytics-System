@@ -39,8 +39,8 @@ def _load_or_create_jwt_secret() -> str:
 
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "School Security Analytics System v2"
-    APP_VERSION: str = "2.0.0"
+    PROJECT_NAME: str = "School Security Analytics System"
+    APP_VERSION: str = "2.1.0"
 
     DATABASE_URL: str = f"sqlite:///{(PROJECT_ROOT / 'school_security.db').as_posix()}"
     REDIS_URL: str = "redis://localhost:6379/0"

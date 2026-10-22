@@ -133,7 +133,10 @@ export const LoginPage: React.FC = () => {
               <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white">
                 School Security Analytics
               </h1>
-              <p className="text-xs text-slate-400">Видеоаналитика школы · YOLOv8 · v2.0</p>
+              <p className="text-xs text-slate-400">
+                Видеоаналитика школы · YOLOv8 ·{" "}
+                <span className="font-mono text-emerald-300">v{APP_VERSION}</span>
+              </p>
             </div>
           </div>
 
@@ -186,6 +189,10 @@ export const LoginPage: React.FC = () => {
                 <h3 className="text-base font-semibold text-white">Вход в систему</h3>
                 <p className="text-xs text-slate-400 mt-0.5">
                   Быстрый вход по роли или учётные данные
+                </p>
+                <p className="text-[10px] font-mono text-emerald-400/80 mt-1">
+                  v{APP_VERSION}
+                  {BUILD_STAMP ? ` · сборка ${BUILD_STAMP}` : ""} · JWT Bearer + cookie
                 </p>
               </div>
               <KeyRound className="w-5 h-5 text-slate-500" />
@@ -302,13 +309,6 @@ export const LoginPage: React.FC = () => {
                 Войти в систему
               </button>
             </form>
-          </div>
-
-          <div className="flex items-center justify-between gap-3 px-1 text-[10px] text-slate-600">
-            <span>
-              v{APP_VERSION} · сборка {BUILD_STAMP}
-            </span>
-            <span>JWT · Bearer + cookie</span>
           </div>
 
           <div className="rounded-2xl border border-slate-800/80 bg-slate-900/40 p-3.5">
