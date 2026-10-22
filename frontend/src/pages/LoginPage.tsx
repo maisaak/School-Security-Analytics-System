@@ -9,6 +9,7 @@ import {
   Loader2,
   Lock,
   ScanEye,
+  ShieldQuestion,
   ShieldAlert,
   ShieldCheck,
   User as UserIcon,
@@ -74,6 +75,8 @@ export const LoginPage: React.FC = () => {
   const [busyRole, setBusyRole] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [totpCode, setTotpCode] = useState("");
+  const [totpRequired, setTotpRequired] = useState(false);
 
   useEffect(() => {
     api.demoAccounts().then(setAccounts).catch(() => setAccounts([]));
@@ -84,9 +87,13 @@ export const LoginPage: React.FC = () => {
     setLocalError(null);
     setSubmitting(true);
     try {
-      await login(username.trim(), password);
+      await login(username.trim(), password, totpRequired ? totpCode.trim() : undefined);
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : "Ошибка входа");
+      const message = err instanceof Error ? err.message : "Ошибка входа";
+      setLocalError(message);
+      if (/2fa|двухфактор/i.test(message)) {
+        setTotpRequired(true);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -299,6 +306,26 @@ export const LoginPage: React.FC = () => {
                   </button>
                 </div>
               </div>
+
+              {totpRequired && (
+                <div className="space-y-1.5 rounded-xl border border-sky-500/40 bg-sky-500/10 px-3 py-2.5">
+                  <label className="flex items-center gap-1.5 text-[11px] font-medium text-sky-200">
+                    <ShieldQuestion className="w-3.5 h-3.5" /> Код двухфакторной аутентификации
+                  </label>
+                  <input
+                    value={totpCode}
+                    onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    placeholder="000000"
+                    className="w-full bg-slate-950 border border-sky-500/40 rounded-xl px-3 py-2 text-center text-sm tracking-[0.4em] font-mono text-slate-100 focus:outline-none focus:border-sky-400"
+                  />
+                  <p className="text-[10px] text-sky-200/70">
+                    Введите 6-значный код из приложения или резервный код. Если аккаунт заблокирован после
+                    неудачных попыток — обратитесь к администратору.
+                  </p>
+                </div>
+              )}
 
               {message && (
                 <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2.5 text-xs text-red-200">

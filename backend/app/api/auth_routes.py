@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
@@ -13,6 +14,9 @@ from app.api.schemas import (
     DemoAccountOut,
     DemoLoginRequest,
     LoginRequest,
+    PasswordChangeIn,
+    PasswordOnlyIn,
+    TotpCodeIn,
     UserOut,
 )
 from app.api.serializers import serialize_user
@@ -24,10 +28,23 @@ from app.core.auth import (
 )
 from app.core.config import settings
 from app.core.permissions import ROLE_DESCRIPTIONS, ROLE_LABELS, Role
-from app.core.security import create_access_token, verify_password
+from app.core.security import (
+    create_access_token,
+    hash_password,
+    password_strength_error,
+    verify_password,
+)
 from app.db.models import User
 from app.db.session import get_db
 from app.services.audit import client_ip, record_audit
+from app.services.totp import (
+    generate_recovery_codes,
+    generate_secret,
+    hash_recovery_code,
+    provisioning_uri,
+    verify_recovery_code,
+    verify_totp,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
@@ -85,8 +102,45 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
     _check_rate_limit(key)
 
     user = db.query(User).filter(User.username == username).first()
+    now = datetime.now(timezone.utc)
+    if user is not None and user.locked_until is not None:
+        locked_until = user.locked_until if user.locked_until.tzinfo else user.locked_until.replace(tzinfo=timezone.utc)
+        if locked_until > now:
+            minutes = max(1, int((locked_until - now).total_seconds() // 60) + 1)
+            record_audit(
+                db,
+                action="auth.login_blocked",
+                request=request,
+                actor_username=username,
+                entity_type="user",
+                entity_id=user.id,
+                outcome="denied",
+                detail={"reason": "account_locked", "minutes_left": minutes},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Учётная запись временно заблокирована после серии неудачных попыток. Повторите через {minutes} мин.",
+            )
+
     if user is None or not verify_password(payload.password, user.password_hash or ""):
         _register_failure(key)
+        if user is not None:
+            user.failed_login_count = int(user.failed_login_count or 0) + 1
+            if user.failed_login_count >= settings.LOGIN_LOCKOUT_ATTEMPTS:
+                user.locked_until = now + timedelta(minutes=settings.LOGIN_LOCKOUT_MINUTES)
+                user.failed_login_count = 0
+                record_audit(
+                    db,
+                    action="auth.account_locked",
+                    request=request,
+                    actor_username=username,
+                    actor_role=user.role,
+                    entity_type="user",
+                    entity_id=user.id,
+                    outcome="denied",
+                    detail={"minutes": settings.LOGIN_LOCKOUT_MINUTES, "reason": "too_many_failures"},
+                )
+            db.commit()
         record_audit(
             db,
             action="auth.login_failed",
@@ -118,6 +172,61 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
             detail="Учётная запись отключена администратором",
         )
 
+    # ── Второй фактор ──────────────────────────────────────────────────────
+    recovery_index: int | None = None
+    if user.totp_enabled and user.totp_secret:
+        code = (payload.totp_code or "").strip()
+        if not code:
+            record_audit(
+                db,
+                action="auth.2fa_challenge",
+                request=request,
+                actor_username=username,
+                actor_role=user.role,
+                entity_type="user",
+                entity_id=user.id,
+                outcome="denied",
+                detail={"reason": "code_required"},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Требуется код двухфакторной аутентификации (2FA)",
+                headers={"X-2FA-Required": "1"},
+            )
+        accepted = verify_totp(user.totp_secret, code)
+        if not accepted:
+            try:
+                stored = json.loads(user.totp_recovery_json or "[]")
+            except (TypeError, ValueError):
+                stored = []
+            if isinstance(stored, list):
+                recovery_index = verify_recovery_code([str(item) for item in stored], code)
+                accepted = recovery_index is not None
+                if accepted:
+                    stored.pop(recovery_index)
+                    user.totp_recovery_json = json.dumps(stored)
+        if not accepted:
+            _register_failure(key)
+            record_audit(
+                db,
+                action="auth.2fa_failed",
+                request=request,
+                actor_username=username,
+                actor_role=user.role,
+                entity_type="user",
+                entity_id=user.id,
+                outcome="denied",
+                detail={"reason": "invalid_code"},
+            )
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Неверный код 2FA. Проверьте время на телефоне или используйте резервный код.",
+                headers={"X-2FA-Required": "1"},
+            )
+
+    user.failed_login_count = 0
+    user.locked_until = None
     session = _issue_session(response, db, user)
     record_audit(
         db,
@@ -126,7 +235,12 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
         user=user,
         entity_type="user",
         entity_id=user.id,
-        detail={"method": "password", "role": user.role},
+        detail={
+            "method": "password",
+            "role": user.role,
+            "2fa": bool(user.totp_enabled),
+            "recovery_code": recovery_index is not None,
+        },
     )
     return session
 
@@ -221,3 +335,128 @@ def demo_accounts(db: Session = Depends(get_db)):
         )
         for u in users
     ]
+
+
+# ─── Двухфакторная аутентификация (TOTP) ────────────────────────────────────
+
+@router.get("/2fa/status")
+def two_factor_status(user: User = Depends(get_current_user)):
+    try:
+        remaining = len(json.loads(user.totp_recovery_json or "[]"))
+    except (TypeError, ValueError):
+        remaining = 0
+    return {"enabled": bool(user.totp_enabled), "recovery_codes_left": remaining}
+
+
+@router.post("/2fa/setup")
+def two_factor_setup(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Генерирует секрет и резервные коды. 2FA включается только после проверки кода."""
+    db_user = db.query(User).filter(User.id == user.id).first()
+    if db_user is None:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    if db_user.totp_enabled:
+        raise HTTPException(status_code=409, detail="2FA уже включена. Сначала отключите её.")
+
+    secret = generate_secret()
+    codes = generate_recovery_codes()
+    db_user.totp_secret = secret
+    db_user.totp_recovery_json = json.dumps([hash_recovery_code(code) for code in codes])
+    db.commit()
+
+    record_audit(
+        db,
+        action="auth.2fa_setup",
+        request=request,
+        user=db_user,
+        entity_type="user",
+        entity_id=db_user.id,
+        detail={"recovery_codes": len(codes)},
+    )
+    return {
+        "secret": secret,
+        "otpauth_uri": provisioning_uri(secret, db_user.username),
+        "recovery_codes": codes,
+        "issuer": settings.TOTP_ISSUER,
+    }
+
+
+@router.post("/2fa/enable")
+def two_factor_enable(
+    payload: TotpCodeIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    db_user = db.query(User).filter(User.id == user.id).first()
+    if db_user is None or not db_user.totp_secret:
+        raise HTTPException(status_code=400, detail="Сначала запустите настройку 2FA")
+    if not verify_totp(db_user.totp_secret, payload.code):
+        raise HTTPException(status_code=400, detail="Код не подошёл. Проверьте время на телефоне и попробуйте снова.")
+    db_user.totp_enabled = True
+    db.commit()
+    record_audit(
+        db,
+        action="auth.2fa_enabled",
+        request=request,
+        user=db_user,
+        entity_type="user",
+        entity_id=db_user.id,
+        detail={"method": "totp"},
+    )
+    return {"status": "enabled", "enabled": True}
+
+
+@router.post("/2fa/disable")
+def two_factor_disable(
+    payload: PasswordOnlyIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    db_user = db.query(User).filter(User.id == user.id).first()
+    if db_user is None or not verify_password(payload.current_password, db_user.password_hash or ""):
+        raise HTTPException(status_code=400, detail="Неверный пароль")
+    db_user.totp_enabled = False
+    db_user.totp_secret = None
+    db_user.totp_recovery_json = "[]"
+    db.commit()
+    record_audit(
+        db,
+        action="auth.2fa_disabled",
+        request=request,
+        user=db_user,
+        entity_type="user",
+        entity_id=db_user.id,
+        detail={"method": "password"},
+    )
+    return {"status": "disabled", "enabled": False}
+
+
+@router.post("/password")
+def change_own_password(
+    payload: PasswordChangeIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    db_user = db.query(User).filter(User.id == user.id).first()
+    if db_user is None or not verify_password(payload.current_password, db_user.password_hash or ""):
+        raise HTTPException(status_code=400, detail="Текущий пароль указан неверно")
+    error = password_strength_error(payload.new_password)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    db_user.password_hash = hash_password(payload.new_password)
+    db.commit()
+    record_audit(
+        db,
+        action="auth.password_changed",
+        request=request,
+        user=db_user,
+        entity_type="user",
+        entity_id=db_user.id,
+    )
+    return {"status": "ok"}

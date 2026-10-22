@@ -1,5 +1,5 @@
 import React from "react";
-import { CheckCircle2, Download, Hourglass, ScanEye, X } from "lucide-react";
+import { CheckCircle2, Download, Hourglass, ScanEye, ShieldAlert, Timer, X } from "lucide-react";
 import { api, Violation } from "../api/client";
 import { VIOLATION_META } from "./ViolationsTable";
 import { formatDateTime } from "./ui";
@@ -20,7 +20,8 @@ export const VideoModal: React.FC<VideoModalProps> = ({
   if (!violation) return null;
   const meta = VIOLATION_META[violation.violation_type] ?? VIOLATION_META.suspicious_bag;
   const downloadUrl = api.videoDownloadUrl(violation);
-  const snapshotUrl = api.mediaUrl(violation.image_path);
+  const snapshotUrl = api.violationSnapshotUrl(violation.id, { watermark: true, download: true });
+  const blurredUrl = api.violationSnapshotUrl(violation.id, { watermark: true, blurFaces: true, download: true });
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
@@ -81,13 +82,35 @@ export const VideoModal: React.FC<VideoModalProps> = ({
 
           <div className="space-y-3 bg-slate-950/80 border border-slate-800 rounded-xl p-3.5">
             <p className="text-[11px] font-medium text-slate-400">Стоп-кадр срабатывания YOLOv8</p>
-            <a href={snapshotUrl} download={`incident_${violation.id}.jpg`} title="Скачать фото улики">
+            <a href={snapshotUrl} title="Скачать кадр с водяным знаком">
               <img
                 src={api.mediaUrl(violation.image_path)}
                 alt={meta.title}
                 className="w-full rounded-lg border border-slate-800 object-cover hover:opacity-90 transition"
               />
             </a>
+            <div className="flex flex-wrap gap-1 text-[9.5px]">
+              {violation.is_false_alarm && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                  ложное срабатывание
+                </span>
+              )}
+              {violation.zone_name && (
+                <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
+                  зона: {violation.zone_name}
+                </span>
+              )}
+              {violation.model_variant && violation.model_variant !== "A" && (
+                <span className="px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">
+                  A/B · вариант {violation.model_variant}
+                </span>
+              )}
+              {violation.acknowledged_latency_sec !== null && (
+                <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1">
+                  <Timer className="w-2.5 h-2.5" /> реакция {violation.acknowledged_latency_sec.toFixed(0)} с
+                </span>
+              )}
+            </div>
             <div className="pt-2 space-y-2">
               {canAck && (
                 <button
@@ -109,6 +132,25 @@ export const VideoModal: React.FC<VideoModalProps> = ({
                 <Download className="w-4 h-4" />
                 Скачать H.264 MP4
               </a>
+              <div className="grid grid-cols-2 gap-1.5">
+                <a
+                  href={snapshotUrl}
+                  className="py-2 px-2 rounded-xl border border-slate-700 hover:bg-slate-800 text-[10px] font-medium text-slate-200 flex items-center justify-center gap-1.5 text-center"
+                  title="Кадр с водяным знаком: кто и когда выгрузил"
+                >
+                  <Download className="w-3.5 h-3.5 shrink-0" /> Кадр
+                </a>
+                <a
+                  href={blurredUrl}
+                  className="py-2 px-2 rounded-xl border border-sky-500/30 bg-sky-500/5 hover:bg-sky-500/10 text-[10px] font-medium text-sky-200 flex items-center justify-center gap-1.5 text-center"
+                  title="Кадр с размытием лиц — для передачи третьим лицам (152-ФЗ)"
+                >
+                  <ShieldAlert className="w-3.5 h-3.5 shrink-0" /> Без лиц
+                </a>
+              </div>
+              <p className="text-[9px] text-slate-500 text-center leading-snug">
+                Выгрузка фиксируется в журнале аудита и журнале выгрузок.
+              </p>
               <p className="text-[10px] text-slate-500 text-center">
                 {violation.is_acknowledged && violation.acknowledged_by
                   ? `Отработал: @${violation.acknowledged_by}`

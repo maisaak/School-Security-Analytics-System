@@ -5,14 +5,22 @@ import {
   Clock,
   Expand,
   Hourglass,
+  Maximize2,
+  Minimize2,
   MonitorPlay,
+  Pause,
   Play,
+  RefreshCw,
   ShieldAlert,
+  Siren,
+  Timer,
   Volume2,
   VolumeX,
   X,
 } from "lucide-react";
-import { api, Camera, DashboardStats, Violation } from "../api/client";
+import { api, Camera, DashboardStats, SlaReport, Violation } from "../api/client";
+import { useAuth } from "../auth/AuthContext";
+import { useLiveEvents } from "../components/LiveEvents";
 import { CameraStream } from "../components/CameraStream";
 import { VIOLATION_META } from "../components/ViolationsTable";
 import { VideoModal } from "../components/VideoModal";
@@ -27,6 +35,8 @@ interface GuardPageProps {
  * и быстрый просмотр фото/видео нарушений.
  */
 export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => {
+  const { can } = useAuth();
+  const { emergency, setEmergency } = useLiveEvents();
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [alarms, setAlarms] = useState<Violation[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -37,6 +47,14 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
   const [onlyUnack, setOnlyUnack] = useState(true);
   const knownIds = useRef<Set<number>>(new Set());
   const [freshIds, setFreshIds] = useState<Set<number>>(new Set());
+  // v3: видеостена на весь экран, автосмена камер и SLA смены
+  const [wallOpen, setWallOpen] = useState(false);
+  const [wallIndex, setWallIndex] = useState(0);
+  const [rotateSec, setRotateSec] = useState(10);
+  const [wallPaused, setWallPaused] = useState(false);
+  const [sla, setSla] = useState<SlaReport | null>(null);
+  const [sirenBusy, setSirenBusy] = useState(false);
+  const wallRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -64,9 +82,81 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
 
   useEffect(() => {
     load();
-    const timer = setInterval(load, 3000);
+    const timer = setInterval(load, 5000);
     return () => clearInterval(timer);
   }, [load]);
+
+  useEffect(() => {
+    const fetchSla = () => api.getSla(1).then(setSla).catch(() => {});
+    fetchSla();
+    const timer = setInterval(fetchSla, 15000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Тревога эвакуации автоматически разворачивает видеостену
+  useEffect(() => {
+    if (emergency.active) setWallOpen(true);
+  }, [emergency.active]);
+
+  useEffect(() => {
+    if (!wallOpen || wallPaused || rotateSec <= 0 || cameras.length < 2) return;
+    const timer = setInterval(() => {
+      setWallIndex((index) => (index + 1) % cameras.length);
+    }, rotateSec * 1000);
+    return () => clearInterval(timer);
+  }, [wallOpen, wallPaused, rotateSec, cameras.length]);
+
+  // F11 / «w» — видеостена, Esc — выход. Браузерный F11 перехватываем,
+  // чтобы стена открывалась внутри приложения, а не только полноэкранный режим.
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+      if (event.key === "F11" || (event.key.toLowerCase() === "w" && event.altKey)) {
+        event.preventDefault();
+        setWallOpen(true);
+      } else if (event.key === "Escape" && wallOpen) {
+        setWallOpen(false);
+      } else if (event.key === "ArrowRight" && wallOpen && cameras.length > 1) {
+        setWallIndex((index) => (index + 1) % cameras.length);
+      } else if (event.key === " " && wallOpen) {
+        event.preventDefault();
+        setWallPaused((value) => !value);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [wallOpen, cameras.length]);
+
+  const toggleFullscreen = async () => {
+    const node = wallRef.current;
+    if (!node) return;
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await node.requestFullscreen();
+      }
+    } catch {
+      // iOS Safari не даёт Fullscreen API для div — остаёмся в полноэкранном оверлее
+    }
+  };
+
+  const triggerEmergency = async () => {
+    if (sirenBusy) return;
+    if (!window.confirm("Включить режим эвакуации? Все камеры будут развёрнуты на видеостене, директор и охрана получат уведомление.")) {
+      return;
+    }
+    setSirenBusy(true);
+    try {
+      await setEmergency(true, "Тревога с поста охраны");
+      setWallOpen(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось включить режим эвакуации");
+    } finally {
+      setSirenBusy(false);
+    }
+  };
 
   const visibleAlarms = useMemo(
     () => (onlyUnack ? alarms.filter((a) => !a.is_acknowledged) : alarms),
@@ -97,7 +187,7 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
             Рабочее место охранника КПП
           </h2>
           <p className="text-[11px] text-slate-400">
-            Видеостена, тревоги и подтверждение отработки · обновление каждые 3 с
+            Видеостена, тревоги и подтверждение отработки · live-лента событий и SLA смены
           </p>
         </div>
 
@@ -119,10 +209,51 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
           >
             {soundOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
           </button>
+          <button
+            onClick={() => {
+              setWallIndex(0);
+              setWallOpen(true);
+            }}
+            className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:bg-slate-800 text-[11px] text-slate-200 transition"
+            title="Видеостена на весь экран (F11), автосмена камер"
+          >
+            <MonitorPlay className="w-4 h-4" /> Видеостена
+          </button>
+          {can("emergency:trigger") && (
+            <button
+              onClick={triggerEmergency}
+              disabled={sirenBusy || emergency.active}
+              className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-[11px] font-semibold transition disabled:opacity-60"
+              title="Режим эвакуации: все камеры на стену, сигнал директору"
+            >
+              <Siren className="w-4 h-4" /> {emergency.active ? "Тревога" : "Эвакуация"}
+            </button>
+          )}
         </div>
       </div>
 
       {error && <ErrorNotice message={error} onRetry={load} />}
+
+      {sla && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+          {[
+            { label: "Средняя реакция", value: sla.avg_latency_sec, suffix: "с", tone: "text-brand-300" },
+            { label: "Медиана", value: sla.median_latency_sec, suffix: "с", tone: "text-sky-300" },
+            { label: "Просрочено SLA", value: sla.overdue_count, suffix: `из ${sla.measured}`, tone: sla.overdue_count ? "text-red-300" : "text-emerald-300" },
+            { label: "Ожидают", value: sla.pending, suffix: "тревог", tone: sla.pending ? "text-amber-300" : "text-emerald-300" },
+          ].map((card) => (
+            <div key={card.label} className="rounded-2xl border border-slate-800 bg-slate-900/80 px-3 py-2.5">
+              <p className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1">
+                <Timer className="w-3 h-3" /> {card.label}
+              </p>
+              <p className={`text-lg font-semibold ${card.tone}`}>
+                {card.value === null || card.value === undefined ? "—" : card.value}
+                <span className="text-[10px] font-normal text-slate-500 ml-1">{card.suffix}</span>
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <div className="xl:col-span-2 space-y-3">
@@ -314,6 +445,99 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
           </div>
         </SectionCard>
       </div>
+
+      {wallOpen && (
+        <div ref={wallRef} className="fixed inset-0 z-[70] bg-black flex flex-col">
+          {(() => {
+            const cam = cameras[wallIndex % Math.max(1, cameras.length)];
+            if (!cam) {
+              return (
+                <div className="flex-1 flex items-center justify-center text-slate-400 text-sm">
+                  Камеры недоступны
+                  <button onClick={() => setWallOpen(false)} className="ml-3 px-3 py-1.5 rounded-lg bg-slate-800 text-white">
+                    Закрыть
+                  </button>
+                </div>
+              );
+            }
+            return (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-black/80 border-b border-slate-800">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${cam.active_threats.length ? "bg-red-600 text-white animate-pulse" : "bg-emerald-600/90 text-white"}`}>
+                      {cam.active_threats.length ? "ТРЕВОГА" : "LIVE"}
+                    </span>
+                    <p className="text-sm font-semibold text-white truncate">{cam.name}</p>
+                    <span className="text-[11px] text-slate-400 truncate hidden sm:inline">{cam.location}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      value={rotateSec}
+                      onChange={(e) => setRotateSec(Number(e.target.value))}
+                      className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-[11px] text-slate-200"
+                      title="Интервал автосмены камер"
+                    >
+                      <option value={0}>Без смены</option>
+                      <option value={5}>5 с</option>
+                      <option value={10}>10 с</option>
+                      <option value={20}>20 с</option>
+                      <option value={30}>30 с</option>
+                    </select>
+                    <button
+                      onClick={() => setWallPaused((v) => !v)}
+                      className="p-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800"
+                      title={wallPaused ? "Продолжить автосмену" : "Пауза автосмены"}
+                    >
+                      {wallPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+                    </button>
+                    <button
+                      onClick={() => setWallIndex((i) => (i + 1) % Math.max(1, cameras.length))}
+                      className="p-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800"
+                      title="Следующая камера"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={toggleFullscreen}
+                      className="p-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800"
+                      title="Полный экран (F11)"
+                    >
+                      {typeof document !== "undefined" && document.fullscreenElement ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                    </button>
+                    <button
+                      onClick={() => setWallOpen(false)}
+                      className="p-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800"
+                      title="Закрыть видеостену"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex-1 min-h-0 bg-black">
+                  <CameraStream camera={cam} showSwitch={false} className="w-full h-full object-contain" />
+                </div>
+
+                <div className="flex gap-2 p-2 bg-black/80 border-t border-slate-800 overflow-x-auto">
+                  {cameras.map((item, index) => (
+                    <button
+                      key={item.id}
+                      onClick={() => setWallIndex(index)}
+                      className={`shrink-0 rounded-lg border px-2.5 py-1.5 text-[10px] transition ${
+                        index === wallIndex % cameras.length
+                          ? "border-brand-500 bg-brand-500/15 text-brand-200"
+                          : "border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800"
+                      }`}
+                    >
+                      {item.name}
+                    </button>
+                  ))}
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
 
       <VideoModal
         violation={activeVideo}

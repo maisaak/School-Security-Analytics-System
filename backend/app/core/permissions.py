@@ -17,8 +17,8 @@ ROLE_LABELS: dict[str, str] = {
 
 ROLE_DESCRIPTIONS: dict[str, str] = {
     Role.ADMIN.value: "Полный доступ: камеры, удаление улик, дообучение YOLOv8, пользователи, аудит",
-    Role.DIRECTOR.value: "Живой просмотр, аналитика, медиа инцидентов, подтверждение тревог, аудит",
-    Role.GUARD.value: "Видеостена КПП, тревоги, подтверждение отработки, проверка медиафайлов",
+    Role.DIRECTOR.value: "Живой просмотр, аналитика и отчёты, подтверждение тревог, посетители, режим эвакуации, аудит",
+    Role.GUARD.value: "Видеостена КПП, тревоги, подтверждение отработки, проверка медиафайлов, гостевые пропуска",
 }
 
 
@@ -37,6 +37,15 @@ class Permission(str, Enum):
     MODELS_ROLLBACK = "models:rollback"
     USERS_MANAGE = "users:manage"
     GUARD_CONSOLE = "guard:console"
+    # v3: отчёты, зоны, эксплуатация, безопасность, школа
+    REPORTS_EXPORT = "reports:export"
+    ZONES_MANAGE = "zones:manage"
+    OPS_MANAGE = "ops:manage"
+    SECURITY_MANAGE = "security:manage"
+    VISITORS_MANAGE = "visitors:manage"
+    ACCESS_VIEW = "access:view"
+    EMERGENCY_TRIGGER = "emergency:trigger"
+    VIOLATIONS_TRAIN = "violations:train"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
@@ -50,6 +59,10 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.AUDIT_VIEW,
             Permission.MEDIA_CHECK,
             Permission.MODELS_VIEW,
+            Permission.REPORTS_EXPORT,
+            Permission.VISITORS_MANAGE,
+            Permission.ACCESS_VIEW,
+            Permission.EMERGENCY_TRIGGER,
         }
     ),
     Role.GUARD: frozenset(
@@ -59,6 +72,9 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.VIOLATIONS_ACK,
             Permission.MEDIA_CHECK,
             Permission.GUARD_CONSOLE,
+            Permission.VISITORS_MANAGE,
+            Permission.ACCESS_VIEW,
+            Permission.EMERGENCY_TRIGGER,
         }
     ),
 }

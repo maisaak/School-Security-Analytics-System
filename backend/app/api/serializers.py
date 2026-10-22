@@ -11,9 +11,11 @@ from app.api.schemas import (
     UserOut,
     ViolationOut,
 )
+from app.core.access import camera_scope_ids
 from app.core.permissions import role_permissions
 from app.core.security import mask_stream_url
 from app.db.models import AuditLog, Camera, ModelVersion, RetrainJob, User, Violation
+from app.services.camera_policy import parse_json
 from app.services.stream_manager import stream_manager
 
 
@@ -52,6 +54,12 @@ def serialize_camera(cam: Camera) -> CameraOut:
         created_at=cam.created_at,
         source_kind=source_kind(cam.rtsp_url),
         detector_profile=profile,
+        confidence_threshold=cam.confidence_threshold,
+        schedule=parse_json(cam.schedule_json, {}),
+        ab_profile=cam.ab_profile,
+        ab_share_pct=cam.ab_share_pct or 0,
+        zones_count=len(cam.zones or []),
+        turnstile=cam.turnstile,
         **tel,
     )
 
@@ -77,6 +85,11 @@ def serialize_violation(v: Violation) -> ViolationOut:
         dwell_seconds=v.dwell_seconds,
         acknowledged_by=v.acknowledged_by,
         acknowledged_at=v.acknowledged_at,
+        is_false_alarm=bool(v.is_false_alarm),
+        acknowledged_latency_sec=v.acknowledged_latency_sec,
+        zone_name=v.zone_name,
+        model_variant=v.model_variant,
+        notes=v.notes or "",
     )
 
 
@@ -150,6 +163,8 @@ def serialize_user(user: User) -> UserOut:
         permissions=role_permissions(user.role),
         created_at=user.created_at,
         last_login_at=user.last_login_at,
+        totp_enabled=bool(user.totp_enabled),
+        camera_scope=sorted(camera_scope_ids(user) or []),
     )
 
 

@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Plus, RefreshCw, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Plus, RefreshCw, X } from "lucide-react";
 import { api, Camera, DashboardStats, DetectorProfile, Violation } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { StatsOverview } from "../components/StatsOverview";
 import { CameraCard } from "../components/CameraCard";
 import { AddCameraModal } from "../components/AddCameraModal";
 import { CameraStream } from "../components/CameraStream";
-import { VIOLATION_META, ViolationsTable } from "../components/ViolationsTable";
+import { VIOLATION_META, ViolationFilters, ViolationsTable } from "../components/ViolationsTable";
+import { CameraPolicyModal } from "../components/CameraPolicyModal";
 import { VideoModal } from "../components/VideoModal";
 import { ErrorNotice } from "../components/ui";
 
@@ -21,9 +22,20 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
   const [violations, setViolations] = useState<Violation[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const [filterType, setFilterType] = useState("");
-  const [filterCameraId, setFilterCameraId] = useState<number | undefined>(undefined);
-  const [onlyUnack, setOnlyUnack] = useState(false);
+  const [filters, setFilters] = useState<ViolationFilters>({
+    type: "",
+    cameraId: undefined,
+    onlyUnack: false,
+    dateFrom: "",
+    dateTo: "",
+    falseAlarmOnly: false,
+    sort: "-detected_at",
+  });
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
+  const [total, setTotal] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [policyCamera, setPolicyCamera] = useState<Camera | null>(null);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [expandedCamera, setExpandedCamera] = useState<Camera | null>(null);
@@ -48,23 +60,30 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
 
   const fetchAll = useCallback(async () => {
     try {
-      const [st, cams, viols] = await Promise.all([
+      const [st, cams, pageData] = await Promise.all([
         api.getStats(),
         api.getCameras(),
-        api.getViolations({
-          violation_type: filterType || undefined,
-          camera_id: filterCameraId,
-          unacknowledged_only: onlyUnack,
+        api.getViolationsPage({
+          violation_type: filters.type || undefined,
+          camera_id: filters.cameraId,
+          unacknowledged_only: filters.onlyUnack,
+          false_alarm: filters.falseAlarmOnly ? true : undefined,
+          date_from: filters.dateFrom || undefined,
+          date_to: filters.dateTo || undefined,
+          sort: filters.sort,
+          limit: pageSize,
+          offset: page * pageSize,
         }),
       ]);
       setStats(st);
       onGlobalStatsUpdate(st);
       setCameras(cams);
-      setViolations(viols);
+      setViolations(pageData.items);
+      setTotal(pageData.total);
       setError(null);
 
-      if (viols.length > 0) {
-        const newest = viols[0];
+      if (pageData.items.length > 0) {
+        const newest = pageData.items[0];
         if (highestSeenId.current !== null && newest.id > highestSeenId.current) {
           setLatestAlert(newest);
         }
@@ -75,7 +94,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось загрузить данные мониторинга");
     }
-  }, [filterType, filterCameraId, onlyUnack, onGlobalStatsUpdate]);
+  }, [filters, page, pageSize, onGlobalStatsUpdate]);
 
   useEffect(() => {
     fetchAll();
@@ -90,6 +109,35 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
       setActiveVideo(updated);
     }
     fetchAll();
+  };
+
+  const handleToggleFalseAlarm = async (violation: Violation) => {
+    try {
+      await api.setFalseAlarm(violation.id, !violation.is_false_alarm);
+      setNotice(
+        violation.is_false_alarm
+          ? `Инцидент #${violation.id} снова считается реальной тревогой`
+          : `Инцидент #${violation.id} помечен как ложное срабатывание — учтён в отчёте по качеству`
+      );
+      fetchAll();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Не удалось обновить разметку");
+    }
+  };
+
+  const handleAddToDataset = async (violation: Violation) => {
+    try {
+      const result = await api.addViolationToDataset(violation.id);
+      setNotice(`Кадр #${violation.id} добавлен в датасет: ${result.filename}`);
+      fetchAll();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Не удалось добавить кадр в датасет");
+    }
+  };
+
+  const patchFilters = (patch: Partial<ViolationFilters>) => {
+    setFilters((current) => ({ ...current, ...patch }));
+    setPage(0);
   };
 
   return (
@@ -137,6 +185,17 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
       )}
 
       {error && <ErrorNotice message={error} onRetry={fetchAll} />}
+
+      {notice && (
+        <div className="rounded-xl border border-brand-500/40 bg-brand-500/10 px-3 py-2 flex items-start justify-between gap-2">
+          <p className="text-[11px] text-brand-200 flex items-center gap-1.5">
+            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> {notice}
+          </p>
+          <button onClick={() => setNotice(null)} className="text-brand-300 hover:text-ink">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       <StatsOverview stats={stats} />
 
@@ -187,6 +246,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
                 fetchAll();
               }}
               onDelete={async (id) => {
+                if (!window.confirm("Удалить камеру и все её улики?")) return;
                 await api.deleteCamera(id);
                 fetchAll();
               }}
@@ -194,6 +254,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
                 await api.simulateEvent(id, scenario);
               }}
               onExpand={setExpandedCamera}
+              onOpenPolicy={setPolicyCamera}
             />
           ))}
         </div>
@@ -202,21 +263,38 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
       <ViolationsTable
         violations={violations}
         cameras={cameras}
-        filterType={filterType}
-        filterCameraId={filterCameraId}
-        onlyUnack={onlyUnack}
+        filters={filters}
+        page={page}
+        pageSize={pageSize}
+        total={total}
         canAck={can("violations:ack")}
         canDelete={can("violations:delete")}
-        onChangeType={setFilterType}
-        onChangeCamera={setFilterCameraId}
-        onChangeUnack={setOnlyUnack}
+        canTrain={can("violations:train")}
+        onChangeType={(value) => patchFilters({ type: value })}
+        onChangeCamera={(cameraId) => patchFilters({ cameraId })}
+        onChangeUnack={(value) => patchFilters({ onlyUnack: value })}
+        onChangeFilters={patchFilters}
+        onPageChange={setPage}
+        onPageSizeChange={setPageSize}
         onOpenVideo={setActiveVideo}
         onAcknowledge={handleAcknowledge}
         onDelete={async (id) => {
+          if (!window.confirm("Удалить запись и медиафайлы без возможности восстановления?")) return;
           await api.deleteViolation(id);
           fetchAll();
         }}
+        onToggleFalseAlarm={handleToggleFalseAlarm}
+        onAddToDataset={handleAddToDataset}
       />
+
+      {policyCamera && (
+        <CameraPolicyModal
+          camera={policyCamera}
+          profiles={detectorProfiles}
+          onClose={() => setPolicyCamera(null)}
+          onSaved={fetchAll}
+        />
+      )}
 
       {can("cameras:manage") && (
         <AddCameraModal

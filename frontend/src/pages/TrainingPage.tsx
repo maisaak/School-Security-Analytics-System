@@ -56,6 +56,7 @@ export const TrainingPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [rollbackTarget, setRollbackTarget] = useState<ModelVersion | null>(null);
+  const [exporting, setExporting] = useState<number | null>(null);
   const [rollbackReason, setRollbackReason] = useState("Деградация качества модели на реальных кадрах");
   const [rollbackForce, setRollbackForce] = useState(false);
   const [rollingBack, setRollingBack] = useState(false);
@@ -178,6 +179,20 @@ export const TrainingPage: React.FC = () => {
       setUploadError(err instanceof Error ? err.message : "Не удалось загрузить веса");
     } finally {
       setUploadingWeights(false);
+    }
+  };
+
+  const handleExport = async (version: ModelVersion, format: "onnx" | "engine") => {
+    setExporting(version.id);
+    try {
+      const result = await api.exportModelVersion(version.id, format);
+      setNotice(
+        `Экспорт ${format.toUpperCase()}: ${result.filename} (${result.size_mb} МБ) — в разделе «Эксплуатация»`
+      );
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Экспорт не удался");
+    } finally {
+      setExporting(null);
     }
   };
 
@@ -666,6 +681,22 @@ export const TrainingPage: React.FC = () => {
                             title="Откатиться на эту версию"
                           >
                             <RotateCcw className="w-3 h-3" /> Откат
+                          </button>
+                          <button
+                            onClick={() => handleExport(version, "onnx")}
+                            disabled={exporting === version.id}
+                            className="px-1.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[9px] font-mono text-slate-200 disabled:opacity-50"
+                            title="Экспорт в ONNX (CPU/GPU, OpenVINO, Triton)"
+                          >
+                            {exporting === version.id ? "…" : "ONNX"}
+                          </button>
+                          <button
+                            onClick={() => handleExport(version, "engine")}
+                            disabled={exporting === version.id}
+                            className="px-1.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[9px] font-mono text-slate-200 disabled:opacity-50"
+                            title="Экспорт в TensorRT engine (Jetson / NVIDIA GPU)"
+                          >
+                            TRT
                           </button>
                           <button
                             onClick={() => handleDeleteVersion(version)}

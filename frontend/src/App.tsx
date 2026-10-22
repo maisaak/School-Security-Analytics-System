@@ -4,12 +4,16 @@ import { api, DashboardStats, SystemStatus } from "./api/client";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { AppTab, Navbar } from "./components/Navbar";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { EmergencyBanner, EventToasts, LiveEventsProvider } from "./components/LiveEvents";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { AuditPage } from "./pages/AuditPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { GuardPage } from "./pages/GuardPage";
 import { LabPage } from "./pages/LabPage";
 import { LoginPage } from "./pages/LoginPage";
+import { OpsPage } from "./pages/OpsPage";
+import { SchoolPage } from "./pages/SchoolPage";
+import { SecurityPage } from "./pages/SecurityPage";
 import { TrainingPage } from "./pages/TrainingPage";
 import { UsersPage } from "./pages/UsersPage";
 import { PrefsProvider, usePrefs } from "./prefs/PrefsContext";
@@ -17,14 +21,17 @@ import { PrefsProvider, usePrefs } from "./prefs/PrefsContext";
 const TAB_PERMISSION: Record<AppTab, string> = {
   dashboard: "cameras:view",
   guard: "guard:console",
+  school: "access:view",
   analytics: "analytics:view",
   lab: "media:check",
   training: "models:train",
+  ops: "ops:manage",
+  security: "security:manage",
   users: "users:manage",
   audit: "audit:view",
 };
 
-const AppShell: React.FC = () => {
+const AppShellInner: React.FC = () => {
   const { user, can } = useAuth();
   const { prefs } = usePrefs();
   const navSpace = prefs.mobile_bottom_nav ? "mobile-nav-space" : "";
@@ -66,12 +73,17 @@ const AppShell: React.FC = () => {
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
+      <EmergencyBanner onOpenWall={() => setActiveTab("guard")} canClear={can("emergency:trigger")} />
+
       <main className={`flex-1 max-w-[1500px] w-full mx-auto px-3 sm:px-6 py-4 sm:py-7 ${navSpace}`}>
         {activeTab === "dashboard" && <DashboardPage onGlobalStatsUpdate={setGlobalStats} />}
         {activeTab === "guard" && <GuardPage onGlobalStatsUpdate={setGlobalStats} />}
+        {activeTab === "school" && <SchoolPage />}
         {activeTab === "analytics" && <AnalyticsPage />}
         {activeTab === "lab" && <LabPage />}
         {activeTab === "training" && <TrainingPage />}
+        {activeTab === "ops" && <OpsPage />}
+        {activeTab === "security" && <SecurityPage />}
         {activeTab === "users" && <UsersPage />}
         {activeTab === "audit" && <AuditPage />}
       </main>
@@ -106,7 +118,17 @@ const AppShell: React.FC = () => {
       </footer>
 
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <EventToasts />
     </div>
+  );
+};
+
+const AppShell: React.FC = () => {
+  const { prefs } = usePrefs();
+  return (
+    <LiveEventsProvider soundEnabled={prefs.sound_enabled} toastsEnabled={prefs.toasts_enabled}>
+      <AppShellInner />
+    </LiveEventsProvider>
   );
 };
 

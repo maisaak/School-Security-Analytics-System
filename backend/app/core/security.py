@@ -45,10 +45,26 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 def password_strength_error(password: str) -> str | None:
-    if len(password or "") < 6:
-        return "Пароль должен содержать минимум 6 символов"
-    if len(password) > 128:
+    """
+    Политика паролей школы: длина >= 10, строчная и заглавная буквы, цифра.
+
+    Демо-учётки создаются в обход проверки (это явно помеченные временные
+    аккаунты для проверки системы), но любые новые и изменяемые пароли —
+    только по политике.
+    """
+    value = password or ""
+    if len(value) < settings.PASSWORD_MIN_LENGTH:
+        return f"Пароль должен содержать минимум {settings.PASSWORD_MIN_LENGTH} символов"
+    if len(value) > 128:
         return "Пароль слишком длинный (максимум 128 символов)"
+    if not any(ch.islower() for ch in value):
+        return "Пароль должен содержать строчные буквы"
+    if not any(ch.isupper() for ch in value):
+        return "Пароль должен содержать заглавные буквы"
+    if not any(ch.isdigit() for ch in value):
+        return "Пароль должен содержать хотя бы одну цифру"
+    if value.lower() in {"password123", "qwerty12345", "admin12345", "school12345"}:
+        return "Пароль слишком простой: выберите другую комбинацию"
     return None
 
 

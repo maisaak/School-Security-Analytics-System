@@ -1,18 +1,24 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import {
+  BellRing,
   Check,
+  Copy,
+  KeyRound,
   LayoutGrid,
   Loader2,
   Moon,
   Palette,
   RotateCcw,
   Rows3,
+  ShieldCheck,
   Smartphone,
   Sun,
   SunDim,
+  Volume2,
   X,
 } from "lucide-react";
-import { AccentName, KpiKey, ThemeName } from "../api/client";
+import { AccentName, api, KpiKey, ThemeName } from "../api/client";
+import { useAuth } from "../auth/AuthContext";
 import {
   ACCENT_LABELS,
   ACCENT_SWATCHES,
@@ -80,6 +86,68 @@ const Toggle: React.FC<{
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose }) => {
   const { prefs, update, reset, saving, error } = usePrefs();
+  const { user, can } = useAuth();
+  const [twoFa, setTwoFa] = useState<{ enabled: boolean; recovery_codes_left: number } | null>(null);
+  const [setupData, setSetupData] = useState<{ secret: string; otpauth_uri: string; recovery_codes: string[] } | null>(null);
+  const [totpCode, setTotpCode] = useState("");
+  const [twoFaBusy, setTwoFaBusy] = useState(false);
+  const [twoFaError, setTwoFaError] = useState<string | null>(null);
+  const [twoFaNotice, setTwoFaNotice] = useState<string | null>(null);
+  const [disablePassword, setDisablePassword] = useState("");
+  const [showDisable, setShowDisable] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    api
+      .twoFactorStatus()
+      .then(setTwoFa)
+      .catch(() => setTwoFa(null));
+  }, [open, user?.totp_enabled]);
+
+  const startTwoFa = async () => {
+    setTwoFaBusy(true);
+    setTwoFaError(null);
+    try {
+      const data = await api.setupTwoFactor();
+      setSetupData(data);
+    } catch (err) {
+      setTwoFaError(err instanceof Error ? err.message : "Не удалось начать настройку 2FA");
+    } finally {
+      setTwoFaBusy(false);
+    }
+  };
+
+  const confirmTwoFa = async () => {
+    setTwoFaBusy(true);
+    setTwoFaError(null);
+    try {
+      await api.enableTwoFactor(totpCode.trim());
+      setTwoFaNotice("Двухфакторная аутентификация включена");
+      setSetupData(null);
+      setTotpCode("");
+      setTwoFa(await api.twoFactorStatus());
+    } catch (err) {
+      setTwoFaError(err instanceof Error ? err.message : "Неверный код");
+    } finally {
+      setTwoFaBusy(false);
+    }
+  };
+
+  const stopTwoFa = async () => {
+    setTwoFaBusy(true);
+    setTwoFaError(null);
+    try {
+      await api.disableTwoFactor(disablePassword);
+      setTwoFaNotice("2FA отключена");
+      setShowDisable(false);
+      setDisablePassword("");
+      setTwoFa(await api.twoFactorStatus());
+    } catch (err) {
+      setTwoFaError(err instanceof Error ? err.message : "Не удалось отключить 2FA");
+    } finally {
+      setTwoFaBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -262,6 +330,169 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose }) =
               hint="Закреплённое меню внизу экрана на телефоне"
               icon={Smartphone}
             />
+          </section>
+
+          {/* ── Звук и уведомления ───────────────────────────────────────── */}
+          <section className="space-y-2">
+            <h3 className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+              Оповещения о тревогах
+            </h3>
+            <Toggle
+              checked={prefs.sound_enabled}
+              onChange={(sound_enabled) => update({ sound_enabled })}
+              label="Звуковой сигнал тревоги"
+              hint="Короткий тон при новом инциденте; повторяется, пока тревога не подтверждена"
+              icon={Volume2}
+            />
+            <Toggle
+              checked={prefs.toasts_enabled}
+              onChange={(toasts_enabled) => update({ toasts_enabled })}
+              label="Всплывающие уведомления"
+              hint="Карточка нового инцидента в углу экрана со ссылкой на кадр"
+              icon={BellRing}
+            />
+            <p className="text-[10px] text-slate-500 leading-relaxed">
+              Счётчик неподтверждённых тревог также дублируется в заголовке вкладки браузера — удобно,
+              когда вкладка свёрнута. Кнопка «Включить звук» может потребоваться один раз: браузеры
+              блокируют автовоспроизведение до первого взаимодействия.
+            </p>
+          </section>
+
+          {/* ── Двухфакторная аутентификация ─────────────────────────────── */}
+          <section className="space-y-2">
+            <h3 className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+              Безопасность учётной записи
+            </h3>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3 space-y-2">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-[11px] font-medium text-ink flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                    Двухфакторная аутентификация (TOTP)
+                  </p>
+                  <p className="text-[10px] text-slate-500">
+                    {twoFa?.enabled
+                      ? `Включена · резервных кодов осталось: ${twoFa.recovery_codes_left}`
+                      : "Google Authenticator, Aegis, 1Password и совместимые приложения"}
+                  </p>
+                </div>
+                <span
+                  className={`text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded border shrink-0 ${
+                    twoFa?.enabled
+                      ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                      : "text-amber-300 border-amber-500/30 bg-amber-500/10"
+                  }`}
+                >
+                  {twoFa?.enabled ? "включена" : "выключена"}
+                </span>
+              </div>
+
+              {!twoFa?.enabled && !setupData && (
+                <button
+                  onClick={startTwoFa}
+                  disabled={twoFaBusy}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-[11px] text-white disabled:opacity-60"
+                >
+                  {twoFaBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <KeyRound className="w-3.5 h-3.5" />}
+                  Настроить 2FA
+                </button>
+              )}
+
+              {setupData && (
+                <div className="space-y-2 rounded-lg border border-brand-500/30 bg-brand-500/5 p-2.5">
+                  <p className="text-[10px] text-slate-300">
+                    1. Добавьте ключ в приложение-аутентификатор (вручную или по ссылке):
+                  </p>
+                  <div className="flex items-center gap-1.5">
+                    <code className="flex-1 text-[10.5px] font-mono text-brand-200 bg-slate-950 rounded px-2 py-1.5 break-all">
+                      {setupData.secret}
+                    </code>
+                    <button
+                      onClick={() => navigator.clipboard?.writeText(setupData.secret)}
+                      className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-ink shrink-0"
+                      title="Скопировать секрет"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <details className="text-[10px] text-slate-500">
+                    <summary className="cursor-pointer">Ссылка otpauth:// и резервные коды</summary>
+                    <p className="font-mono break-all mt-1 text-slate-400">{setupData.otpauth_uri}</p>
+                    <div className="grid grid-cols-2 gap-1 mt-1.5">
+                      {setupData.recovery_codes.map((code) => (
+                        <code key={code} className="font-mono text-slate-300 bg-slate-950 rounded px-1.5 py-0.5">
+                          {code}
+                        </code>
+                      ))}
+                    </div>
+                    <p className="text-amber-300/80 mt-1">Сохраните резервные коды: они одноразовые.</p>
+                  </details>
+                  <p className="text-[10px] text-slate-300">2. Введите код из приложения:</p>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      value={totpCode}
+                      onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                      placeholder="000000"
+                      inputMode="numeric"
+                      className="w-24 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-center font-mono tracking-widest text-[12px] text-slate-100"
+                    />
+                    <button
+                      onClick={confirmTwoFa}
+                      disabled={twoFaBusy || totpCode.length < 6}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-[11px] text-white disabled:opacity-50"
+                    >
+                      Подтвердить
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {twoFa?.enabled && !showDisable && (
+                <button
+                  onClick={() => setShowDisable(true)}
+                  className="px-3 py-1.5 rounded-lg border border-slate-700 text-[10.5px] text-slate-300 hover:bg-slate-800"
+                >
+                  Отключить 2FA
+                </button>
+              )}
+              {showDisable && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <input
+                    type="password"
+                    value={disablePassword}
+                    onChange={(e) => setDisablePassword(e.target.value)}
+                    placeholder="Текущий пароль"
+                    className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-[11px] text-slate-200"
+                  />
+                  <button
+                    onClick={stopTwoFa}
+                    disabled={twoFaBusy || !disablePassword}
+                    className="px-2.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-[10.5px] text-white disabled:opacity-50"
+                  >
+                    Подтвердить
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowDisable(false);
+                      setDisablePassword("");
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-[10.5px] text-slate-300"
+                  >
+                    Отмена
+                  </button>
+                </div>
+              )}
+
+              {twoFaNotice && <p className="text-[10px] text-emerald-300">{twoFaNotice}</p>}
+              {twoFaError && <p className="text-[10px] text-red-300">{twoFaError}</p>}
+            </div>
+
+            {can("security:manage") && (
+              <p className="text-[10px] text-slate-500 leading-relaxed">
+                Политика паролей и блокировка после неудачных попыток применяются автоматически.
+                Сброс 2FA и разблокировка других учётных записей — в разделе «Безопасность и 2FA».
+              </p>
+            )}
           </section>
 
           {error && (

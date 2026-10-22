@@ -64,6 +64,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   compact_tables: false,
   show_timeline: true,
   mobile_bottom_nav: true,
+  sound_enabled: true,
+  toasts_enabled: true,
 };
 
 const STORAGE_KEY = "school_security_prefs";
@@ -86,6 +88,8 @@ function normalize(raw: Partial<Preferences> | null | undefined): Preferences {
       ? (raw.accent as AccentName)
       : base.accent,
     kpis: kpis.length ? kpis : base.kpis,
+    sound_enabled: raw.sound_enabled !== false,
+    toasts_enabled: raw.toasts_enabled !== false,
   };
 }
 
@@ -180,6 +184,8 @@ export const PrefsProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         compact_tables: next.compact_tables,
         show_timeline: next.show_timeline,
         mobile_bottom_nav: next.mobile_bottom_nav,
+        sound_enabled: next.sound_enabled,
+        toasts_enabled: next.toasts_enabled,
       });
       savedRef.current = normalize(stored);
       setError(null);

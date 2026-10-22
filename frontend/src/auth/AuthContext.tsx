@@ -5,7 +5,7 @@ interface AuthContextValue {
   user: User | null;
   loading: boolean;
   error: string | null;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string, totpCode?: string) => Promise<void>;
   demoLogin: (username: string) => Promise<void>;
   logout: () => Promise<void>;
   can: (permission: string) => boolean;
@@ -49,10 +49,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, handler);
   }, []);
 
-  const login = useCallback(async (username: string, password: string) => {
+  const login = useCallback(async (username: string, password: string, totpCode?: string) => {
     setError(null);
     try {
-      const session = await api.login(username, password);
+      const session = await api.login(username, password, totpCode);
       setAccessToken(session.access_token ?? null);
       setUser(session.user);
       hadSession.current = true;

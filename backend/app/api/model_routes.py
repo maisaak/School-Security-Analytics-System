@@ -7,7 +7,11 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+import subprocess
+import sys
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.api.schemas import (
@@ -553,3 +557,121 @@ def validation_gate_info(
         "active_weights": detector.active_weights_name,
         "active_map50": production.map50 if production else None,
     }
+
+
+# ─── Экспорт весов в ONNX / TensorRT ────────────────────────────────────────
+
+EXPORT_FORMATS = {"onnx": "ONNX", "engine": "TensorRT engine"}
+
+
+def _exports_dir():
+    path = settings.MODEL_VERSIONS_ROOT / "exports"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+@router.get("/exports")
+def list_exports(_: User = Depends(require_permissions(Permission.MODELS_VIEW))):
+    items = []
+    for path in sorted(_exports_dir().glob("*"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if path.is_file():
+            items.append(
+                {
+                    "filename": path.name,
+                    "size_mb": round(path.stat().st_size / 1024**2, 2),
+                    "created_at": datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(timespec="seconds"),
+                    "download_url": f"/api/models/exports/{path.name}",
+                }
+            )
+    return {"formats": EXPORT_FORMATS, "items": items}
+
+
+@router.post("/versions/{version_id}/export")
+def export_version(
+    version_id: int,
+    request: Request,
+    format: str = Query(default="onnx", pattern="^(onnx|engine)$"),
+    imgsz: int = Query(default=640, ge=320, le=1280),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permissions(Permission.MODELS_ROLLBACK)),
+):
+    """
+    Экспорт выбранной версии весов через Ultralytics: ONNX для кроссплатформенного
+    инференса, TensorRT engine — для GPU-сервера школы. Операция тяжёлая, поэтому
+    вынесена в отдельный процесс с таймаутом 10 минут.
+    """
+    version = db.query(ModelVersion).filter(ModelVersion.id == version_id).first()
+    if version is None:
+        raise HTTPException(status_code=404, detail="Версия весов не найдена")
+    weights = (PROJECT_ROOT / version.weights_path).resolve()
+    try:
+        weights.relative_to(PROJECT_ROOT.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Некорректный путь весов") from exc
+    if not weights.is_file():
+        raise HTTPException(status_code=404, detail="Файл весов отсутствует на диске")
+
+    out_dir = _exports_dir()
+    code = (
+        "import sys\n"
+        "from ultralytics import YOLO\n"
+        "model = YOLO(sys.argv[1])\n"
+        "path = model.export(format=sys.argv[2], imgsz=int(sys.argv[3]), project=sys.argv[4], name='run', exist_ok=True)\n"
+        "print(path)\n"
+    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code, str(weights), format, str(imgsz), str(out_dir)],
+            capture_output=True,
+            timeout=600,
+            cwd=str(PROJECT_ROOT),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail="Экспорт занял больше 10 минут и был остановлен") from exc
+
+    if proc.returncode != 0:
+        tail = (proc.stderr or b"").decode("utf-8", errors="replace")[-1200:]
+        raise HTTPException(status_code=400, detail=f"Экспорт не удался: {tail or 'нет диагностики'}")
+
+    produced = None
+    target_suffix = ".onnx" if format == "onnx" else ".engine"
+    for path in sorted(out_dir.rglob("*"), key=lambda p: p.stat().st_mtime if p.is_file() else 0, reverse=True):
+        if path.is_file() and path.suffix == target_suffix:
+            produced = path
+            break
+    if produced is None:
+        raise HTTPException(status_code=500, detail="Экспорт завершился без файла результата")
+
+    record_audit(
+        db,
+        action="model.export",
+        request=request,
+        user=user,
+        entity_type="model_version",
+        entity_id=version.id,
+        detail={"format": format, "file": produced.name, "size_mb": round(produced.stat().st_size / 1024**2, 2)},
+    )
+    return {
+        "status": "exported",
+        "format": format,
+        "filename": produced.name,
+        "size_mb": round(produced.stat().st_size / 1024**2, 2),
+        "download_url": f"/api/models/exports/{produced.name}",
+        "version_id": version.id,
+    }
+
+
+@router.get("/exports/{filename}")
+def download_export(
+    filename: str,
+    _: User = Depends(require_permissions(Permission.MODELS_VIEW)),
+):
+    safe_name = Path(filename).name
+    path = (_exports_dir() / safe_name).resolve()
+    try:
+        path.relative_to(_exports_dir().resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Некорректное имя файла") from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Файл экспорта не найден")
+    return FileResponse(path, filename=safe_name, media_type="application/octet-stream")

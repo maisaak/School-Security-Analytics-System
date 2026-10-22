@@ -30,3 +30,9 @@ ml/datasets/custom/
 # Auth secret and weights registry (runtime artifacts)
 .jwt_secret
 ml/versions/
+
+# Резервные копии БД и экспорт моделей
+backups/
+*.dump
+*.onnx
+*.engine

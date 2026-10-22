@@ -1,5 +1,21 @@
 import React from "react";
-import { CheckCircle2, Clock, Download, Hourglass, Play, ScanEye, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowUpDown,
+  BrainCircuit,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Download,
+  FileSpreadsheet,
+  FileText,
+  Hourglass,
+  ImageDown,
+  Play,
+  ScanEye,
+  Trash2,
+} from "lucide-react";
 import { api, Camera, Violation } from "../api/client";
 import { usePrefs } from "../prefs/PrefsContext";
 import { formatDateTime } from "./ui";
@@ -22,43 +38,79 @@ export const VIOLATION_META: Record<
   },
 };
 
+export interface ViolationFilters {
+  type: string;
+  cameraId?: number;
+  onlyUnack: boolean;
+  dateFrom: string;
+  dateTo: string;
+  falseAlarmOnly: boolean;
+  sort: string;
+}
+
 interface ViolationsTableProps {
   violations: Violation[];
   cameras: Camera[];
-  filterType: string;
-  filterCameraId: number | undefined;
-  onlyUnack: boolean;
+  filters: ViolationFilters;
+  page: number;
+  pageSize: number;
+  total: number;
   canAck: boolean;
   canDelete: boolean;
+  canTrain: boolean;
   onChangeType: (value: string) => void;
   onChangeCamera: (cameraId: number | undefined) => void;
   onChangeUnack: (value: boolean) => void;
+  onChangeFilters: (patch: Partial<ViolationFilters>) => void;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (size: number) => void;
   onOpenVideo: (violation: Violation) => void;
   onAcknowledge: (id: number) => void;
   onDelete: (id: number) => void;
+  onToggleFalseAlarm: (violation: Violation) => void;
+  onAddToDataset: (violation: Violation) => void;
 }
 
 export const ViolationsTable: React.FC<ViolationsTableProps> = ({
   violations,
   cameras,
-  filterType,
-  filterCameraId,
-  onlyUnack,
+  filters,
+  page,
+  pageSize,
+  total,
   canAck,
   canDelete,
+  canTrain,
   onChangeType,
   onChangeCamera,
   onChangeUnack,
+  onChangeFilters,
+  onPageChange,
+  onPageSizeChange,
   onOpenVideo,
   onAcknowledge,
   onDelete,
+  onToggleFalseAlarm,
+  onAddToDataset,
 }) => {
   const { prefs } = usePrefs();
-  const exportUrl = api.violationsExportUrl({
-    violation_type: filterType || undefined,
-    camera_id: filterCameraId,
-    unacknowledged_only: onlyUnack,
-  });
+  const pages = Math.max(1, Math.ceil(total / Math.max(1, pageSize)));
+  const from = total === 0 ? 0 : page * pageSize + 1;
+  const to = Math.min(total, (page + 1) * pageSize);
+  const exportParams = {
+    violation_type: filters.type || undefined,
+    camera_id: filters.cameraId,
+    unacknowledged_only: filters.onlyUnack,
+    false_alarm: filters.falseAlarmOnly ? true : undefined,
+    date_from: filters.dateFrom || undefined,
+    date_to: filters.dateTo || undefined,
+  };
+  const reportParams = {
+    date_from: filters.dateFrom || undefined,
+    date_to: filters.dateTo || undefined,
+    camera_id: filters.cameraId,
+    violation_type: filters.type || undefined,
+  };
 
   return (
     <section className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
@@ -66,23 +118,41 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
         <div>
           <h2 className="text-sm sm:text-base font-semibold text-ink">Журнал зафиксированных нарушений</h2>
           <p className="text-[11px] text-slate-400">
-            Фотофиксация, H.264-клип и данные трекинга по каждому срабатыванию YOLO · показано {violations.length}
+            Серверная пагинация и сортировка · записей за период: <span className="text-slate-200">{total}</span>
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
           <a
-            href={exportUrl}
+            href={api.violationsExportUrl({ ...exportParams, limit: 20000 })}
             download
-            title="Скачать выбранные записи в CSV (Excel, разделитель «;», UTF-8)"
+            title="CSV для Excel: «;», UTF-8 BOM, фильтры и период учитываются"
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-[11px] font-medium text-white transition"
           >
-            <Download className="w-3.5 h-3.5" />
-            Экспорт CSV
+            <Download className="w-3.5 h-3.5" /> Экспорт CSV
           </a>
+          <a
+            href={api.reportUrl("pdf", reportParams)}
+            title="PDF-отчёт с водяным знаком и сводкой SLA"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] text-slate-200 transition"
+          >
+            <FileText className="w-3.5 h-3.5" /> PDF
+          </a>
+          <a
+            href={api.reportUrl("xlsx", reportParams)}
+            title="Excel-отчёт: сводка, инциденты, топ камер"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] text-slate-200 transition"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" /> Excel
+          </a>
+        </div>
+      </div>
 
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="space-y-1">
+          <span className="block text-[10px] uppercase tracking-wide text-slate-500">Тип</span>
           <select
-            value={filterType}
+            value={filters.type}
             onChange={(e) => onChangeType(e.target.value)}
             className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-brand-500"
           >
@@ -91,9 +161,12 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
             <option value="suspicious_bag">Бесхозные сумки</option>
             <option value="dog">Собаки на территории</option>
           </select>
+        </label>
 
+        <label className="space-y-1">
+          <span className="block text-[10px] uppercase tracking-wide text-slate-500">Камера</span>
           <select
-            value={filterCameraId ?? ""}
+            value={filters.cameraId ?? ""}
             onChange={(e) => onChangeCamera(e.target.value ? Number(e.target.value) : undefined)}
             className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-brand-500 max-w-[190px]"
           >
@@ -104,17 +177,79 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
               </option>
             ))}
           </select>
+        </label>
 
-          <label className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-[11px] text-slate-300 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={onlyUnack}
-              onChange={(e) => onChangeUnack(e.target.checked)}
-              className="rounded accent-brand-500"
-            />
-            Неподтверждённые
-          </label>
-        </div>
+        <label className="space-y-1">
+          <span className="block text-[10px] uppercase tracking-wide text-slate-500">С даты</span>
+          <input
+            type="date"
+            value={filters.dateFrom}
+            onChange={(e) => {
+              onChangeFilters({ dateFrom: e.target.value });
+              onPageChange(0);
+            }}
+            className="bg-slate-950 border border-slate-800 rounded-xl px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-brand-500"
+          />
+        </label>
+
+        <label className="space-y-1">
+          <span className="block text-[10px] uppercase tracking-wide text-slate-500">По дату</span>
+          <input
+            type="date"
+            value={filters.dateTo}
+            onChange={(e) => {
+              onChangeFilters({ dateTo: e.target.value });
+              onPageChange(0);
+            }}
+            className="bg-slate-950 border border-slate-800 rounded-xl px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-brand-500"
+          />
+        </label>
+
+        <label className="space-y-1">
+          <span className="block text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1">
+            <ArrowUpDown className="w-3 h-3" /> Сортировка
+          </span>
+          <select
+            value={filters.sort}
+            onChange={(e) => {
+              onChangeFilters({ sort: e.target.value });
+              onPageChange(0);
+            }}
+            className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-brand-500"
+          >
+            <option value="-detected_at">Сначала новые</option>
+            <option value="detected_at">Сначала старые</option>
+            <option value="-confidence">Уверенность ↓</option>
+            <option value="confidence">Уверенность ↑</option>
+            <option value="-acknowledged_latency_sec">Реакция ↓</option>
+          </select>
+        </label>
+
+        <label className="inline-flex items-center gap-2 px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-[11px] text-slate-300 cursor-pointer select-none self-end">
+          <input
+            type="checkbox"
+            checked={filters.onlyUnack}
+            onChange={(e) => {
+              onChangeUnack(e.target.checked);
+              onPageChange(0);
+            }}
+            className="rounded accent-brand-500"
+          />
+          Неподтверждённые
+        </label>
+
+        <label className="inline-flex items-center gap-2 px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-[11px] text-slate-300 cursor-pointer select-none self-end">
+          <input
+            type="checkbox"
+            checked={filters.falseAlarmOnly}
+            onChange={(e) => {
+              onChangeFilters({ falseAlarmOnly: e.target.checked });
+              onPageChange(0);
+            }}
+            className="rounded accent-amber-500"
+          />
+          Только ложные
+        </label>
       </div>
 
       <div className="overflow-x-auto">
@@ -125,7 +260,7 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
               <th className="py-3 px-2">Класс угрозы</th>
               <th className="py-3 px-2">Камера / Зона</th>
               <th className="py-3 px-2">Уверенность</th>
-              <th className="py-3 px-2">Трекинг</th>
+              <th className="py-3 px-2">Трекинг / реакция</th>
               <th className="py-3 px-2">Время</th>
               <th className="py-3 px-2">Статус</th>
               <th className="py-3 px-2 text-right">Действия</th>
@@ -157,6 +292,11 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
                         <span className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
                           <Play className="w-4 h-4 text-ink fill-white" />
                         </span>
+                        {v.is_false_alarm && (
+                          <span className="absolute top-0.5 left-0.5 px-1 py-0.5 rounded bg-amber-500/90 text-[8px] font-bold text-slate-950">
+                            ЛОЖНОЕ
+                          </span>
+                        )}
                       </button>
                     </td>
                     <td className="py-3 px-2">
@@ -165,10 +305,15 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
                       >
                         {meta.title}
                       </span>
+                      {v.model_variant && v.model_variant !== "A" && (
+                        <span className="ml-1 text-[9px] font-mono text-sky-300">A/B:{v.model_variant}</span>
+                      )}
                     </td>
                     <td className="py-3 px-2">
                       <div className="font-medium text-ink text-[11px] sm:text-xs">{v.camera_name}</div>
-                      <div className="text-[10px] text-slate-400">{v.camera_location}</div>
+                      <div className="text-[10px] text-slate-400">
+                        {v.zone_name ? `зона: ${v.zone_name}` : v.camera_location}
+                      </div>
                     </td>
                     <td className="py-3 px-2">
                       <div className="flex items-center gap-1.5">
@@ -197,6 +342,10 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
                             </div>
                           )}
                         </div>
+                      ) : v.acknowledged_latency_sec !== null ? (
+                        <span className="text-[10px] text-emerald-300">
+                          реакция {v.acknowledged_latency_sec.toFixed(0)} с
+                        </span>
                       ) : (
                         <span className="text-[10px] text-slate-600">—</span>
                       )}
@@ -247,14 +396,43 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
                       )}
                     </td>
                     <td className="py-3 px-2 text-right whitespace-nowrap">
-                      <div className="inline-flex items-center gap-1.5">
+                      <div className="inline-flex items-center gap-1">
                         <button
                           onClick={() => onOpenVideo(v)}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-[10px] font-medium transition"
+                          className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-[10px] font-medium transition"
+                          title="Открыть фото и видео"
                         >
-                          <Play className="w-3 h-3" />
-                          Видео
+                          <Play className="w-3 h-3" /> Видео
                         </button>
+                        <a
+                          href={api.violationSnapshotUrl(v.id, { watermark: true, blurFaces: false, download: true })}
+                          title="Скачать кадр с водяным знаком (кто и когда выгрузил)"
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-sky-300 hover:bg-sky-500/10 transition"
+                        >
+                          <ImageDown className="w-3.5 h-3.5" />
+                        </a>
+                        {canAck && (
+                          <button
+                            onClick={() => onToggleFalseAlarm(v)}
+                            title={v.is_false_alarm ? "Снять отметку «ложное срабатывание»" : "Отметить как ложное срабатывание"}
+                            className={`p-1.5 rounded-lg transition ${
+                              v.is_false_alarm
+                                ? "text-amber-300 bg-amber-500/15"
+                                : "text-slate-400 hover:text-amber-300 hover:bg-amber-500/10"
+                            }`}
+                          >
+                            <AlertTriangle className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        {canTrain && (
+                          <button
+                            onClick={() => onAddToDataset(v)}
+                            title="Добавить кадр в датасет дообучения (активное обучение)"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-sky-300 hover:bg-sky-500/10 transition"
+                          >
+                            <BrainCircuit className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                         {canDelete && (
                           <button
                             onClick={() => onDelete(v.id)}
@@ -272,6 +450,46 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
             )}
           </tbody>
         </table>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-3">
+        <div className="flex items-center gap-2 text-[11px] text-slate-400">
+          <span>
+            Показано {from}–{to} из {total}
+          </span>
+          <select
+            value={pageSize}
+            onChange={(e) => {
+              onPageSizeChange(Number(e.target.value));
+              onPageChange(0);
+            }}
+            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-slate-300"
+          >
+            <option value={10}>10 / стр.</option>
+            <option value={25}>25 / стр.</option>
+            <option value={50}>50 / стр.</option>
+            <option value={100}>100 / стр.</option>
+          </select>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => onPageChange(Math.max(0, page - 1))}
+            disabled={page <= 0}
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 text-[11px] text-slate-200 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+          >
+            <ChevronLeft className="w-3.5 h-3.5" /> Назад
+          </button>
+          <span className="text-[11px] text-slate-400 font-mono px-1">
+            {page + 1} / {pages}
+          </span>
+          <button
+            onClick={() => onPageChange(Math.min(pages - 1, page + 1))}
+            disabled={page + 1 >= pages}
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 text-[11px] text-slate-200 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+          >
+            Вперёд <ChevronRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
     </section>
   );

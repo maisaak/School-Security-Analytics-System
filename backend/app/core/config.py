@@ -78,6 +78,43 @@ class Settings(BaseSettings):
     MAX_UPLOAD_MODEL_MB: int = 200
     MAX_STORED_VIOLATIONS: int = 250
 
+    # ── Эксплуатация и хранение улик ────────────────────────────────────────
+    # Политика хранения медиа: срок жизни записей и квота диска (ГБ).
+    RETENTION_DAYS: int = 30
+    RETENTION_MAX_GB: float = 5.0
+    RETENTION_AUTO_CLEAN: bool = True
+    RETENTION_INTERVAL_SEC: int = 900
+    BACKUP_DIR: Path = PROJECT_ROOT / "backups"
+    BACKUP_KEEP: int = 14
+
+    # ── Watchdog камер ─────────────────────────────────────────────────────
+    WATCHDOG_ENABLED: bool = True
+    WATCHDOG_INTERVAL_SEC: int = 8
+    WATCHDOG_STALE_SEC: float = 12.0
+
+    # ── SLA реакции охраны ─────────────────────────────────────────────────
+    SLA_TARGET_SEC: int = 60
+    SCHOOL_START_TIME: str = "08:30"
+    LATE_GRACE_MIN: int = 5
+
+    # ── Уведомления (Telegram) ─────────────────────────────────────────────
+    TELEGRAM_ENABLED: bool = False
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_DIRECTOR_CHAT_ID: str = ""
+    TELEGRAM_GUARD_CHAT_ID: str = ""
+    TELEGRAM_POLL_SEC: float = 2.0
+
+    # ── Безопасность учётных записей ───────────────────────────────────────
+    PASSWORD_MIN_LENGTH: int = 10
+    LOGIN_LOCKOUT_ATTEMPTS: int = 5
+    LOGIN_LOCKOUT_MINUTES: int = 15
+    TOTP_ISSUER: str = "Аналитика безопасности школы"
+
+    # ── Наблюдаемость ──────────────────────────────────────────────────────
+    METRICS_ENABLED: bool = True
+    SENTRY_DSN: str = ""
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.0
+
     YOLO_COCO_MODEL_PATH: Path = PROJECT_ROOT / "ml" / "models" / "yolov8n.pt"
     YOLO_WEAPON_MODEL_PATH: Path = PROJECT_ROOT / "ml" / "models" / "weapon_yolov8.pt"
     YOLO_CUSTOM_MODEL_PATH: Path = PROJECT_ROOT / "ml" / "models" / "school_security_best.pt"
@@ -131,6 +168,7 @@ settings.YOLO_WEAPON_MODEL_PATH = _resolve_repo_path(settings.YOLO_WEAPON_MODEL_
 settings.YOLO_CUSTOM_MODEL_PATH = _resolve_repo_path(settings.YOLO_CUSTOM_MODEL_PATH)
 settings.MEDIA_ROOT = _resolve_repo_path(settings.MEDIA_ROOT)
 settings.MODEL_VERSIONS_ROOT = _resolve_repo_path(settings.MODEL_VERSIONS_ROOT)
+settings.BACKUP_DIR = _resolve_repo_path(settings.BACKUP_DIR)
 
 if not (settings.JWT_SECRET_KEY or "").strip():
     settings.JWT_SECRET_KEY = _load_or_create_jwt_secret()
@@ -138,3 +176,4 @@ if not (settings.JWT_SECRET_KEY or "").strip():
 for sub in ("snapshots", "videos", "uploads", "hls"):
     (settings.MEDIA_ROOT / sub).mkdir(parents=True, exist_ok=True)
 settings.MODEL_VERSIONS_ROOT.mkdir(parents=True, exist_ok=True)
+settings.BACKUP_DIR.mkdir(parents=True, exist_ok=True)

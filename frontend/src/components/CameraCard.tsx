@@ -1,5 +1,5 @@
 import React from "react";
-import { BrainCircuit, Hourglass, KeyRound, Maximize2, Pause, Play, Sparkles, Trash2 } from "lucide-react";
+import { BrainCircuit, Crosshair, FlaskConical, Hourglass, KeyRound, Maximize2, Pause, Play, SlidersHorizontal, Sparkles, Trash2 } from "lucide-react";
 import { Camera, DetectorProfile } from "../api/client";
 import { CameraStream } from "./CameraStream";
 
@@ -17,6 +17,7 @@ interface CameraCardProps {
   onExpand: (camera: Camera) => void;
   detectorProfiles?: DetectorProfile[];
   onDetectorChange?: (id: number, profile: string) => void;
+  onOpenPolicy?: (camera: Camera) => void;
 }
 
 export const CameraCard: React.FC<CameraCardProps> = ({
@@ -30,6 +31,7 @@ export const CameraCard: React.FC<CameraCardProps> = ({
   onExpand,
   detectorProfiles = [],
   onDetectorChange,
+  onOpenPolicy,
 }) => {
   const hasThreat = camera.active_threats.length > 0;
   const holding = camera.bag_tracking?.filter((t) => t.state === "holding") ?? [];
@@ -116,7 +118,17 @@ export const CameraCard: React.FC<CameraCardProps> = ({
               {camera.has_credentials && <KeyRound className="w-3 h-3 text-amber-500/80 shrink-0" />}
               {camera.rtsp_url}
             </p>
-            <div className="flex items-center gap-1.5 mt-1.5">
+            <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+              {camera.zones_count > 0 && (
+                <span className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border text-brand-300 border-brand-500/30 bg-brand-500/10">
+                  <Crosshair className="w-2.5 h-2.5" /> {camera.zones_count} зон
+                </span>
+              )}
+              {camera.ab_profile && (
+                <span className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border text-sky-300 border-sky-500/30 bg-sky-500/10">
+                  <FlaskConical className="w-2.5 h-2.5" /> A/B {camera.ab_share_pct}%
+                </span>
+              )}
               <span
                 className={`text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border ${
                   camera.source_kind === "rtsp"
@@ -146,6 +158,13 @@ export const CameraCard: React.FC<CameraCardProps> = ({
             </span>
             {canManage && (
               <>
+                <button
+                  onClick={() => onOpenPolicy?.(camera)}
+                  title="Зоны ROI, порог, расписание и A/B моделей"
+                  className="p-2 rounded-lg text-slate-400 hover:text-brand-300 hover:bg-brand-500/10 transition"
+                >
+                  <SlidersHorizontal className="w-4 h-4" />
+                </button>
                 <button
                   onClick={() => onToggle(camera.id)}
                   title={camera.is_active ? "Приостановить поток" : "Возобновить поток"}

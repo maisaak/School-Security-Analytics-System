@@ -13,6 +13,8 @@ RoleLiteral = Literal["admin", "director", "guard"]
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=2, max_length=64)
     password: str = Field(..., min_length=1, max_length=128)
+    # Код приложения-аутентификатора, если у пользователя включена 2FA
+    totp_code: str | None = Field(default=None, max_length=16)
 
 
 class DemoLoginRequest(BaseModel):
@@ -29,6 +31,8 @@ class UserOut(BaseModel):
     permissions: list[str] = []
     created_at: datetime
     last_login_at: datetime | None = None
+    totp_enabled: bool = False
+    camera_scope: list[int] = []
 
 
 class UserCreate(BaseModel):
@@ -103,6 +107,13 @@ class CameraOut(BaseModel):
     detector_profile: str = "ensemble"
     stream_mode: str = "mjpeg"  # hls | mjpeg
     hls_ready: bool = False
+    # v3: аналитическая политика камеры
+    confidence_threshold: float | None = None
+    schedule: dict = {}
+    ab_profile: str | None = None
+    ab_share_pct: int = 0
+    zones_count: int = 0
+    turnstile: str | None = None
 
 
 class SimulateRequest(BaseModel):
@@ -127,6 +138,11 @@ class ViolationOut(BaseModel):
     dwell_seconds: float | None = None
     acknowledged_by: str | None = None
     acknowledged_at: datetime | None = None
+    is_false_alarm: bool = False
+    acknowledged_latency_sec: float | None = None
+    zone_name: str | None = None
+    model_variant: str | None = None
+    notes: str = ""
 
 
 # ─── Дообучение, реестр версий и Validation Gate ─────────────────────────────
@@ -267,6 +283,9 @@ class PreferencesIn(BaseModel):
     compact_tables: bool = False
     show_timeline: bool = True
     mobile_bottom_nav: bool = True
+    # v3: уведомления в интерфейсе
+    sound_enabled: bool = True
+    toasts_enabled: bool = True
 
     @field_validator("kpis")
     @classmethod
@@ -286,3 +305,99 @@ class PreferencesIn(BaseModel):
 
 class PreferencesOut(PreferencesIn):
     updated_at: str | None = None
+
+
+# ─── v3: зоны, политика камеры, эксплуатация, школа ──────────────────────────
+
+class ZoneIn(BaseModel):
+    id: int | None = None
+    name: str = Field(default="Зона", max_length=120)
+    kind: Literal["include", "exclude"] = "include"
+    color: str = Field(default="#10b981", max_length=16)
+    points: list[list[float]] = Field(default_factory=list)
+
+
+class ZonesPayload(BaseModel):
+    zones: list[ZoneIn] = Field(default_factory=list)
+
+
+class CameraPolicyIn(BaseModel):
+    confidence_threshold: float | None = Field(default=None, ge=0.05, le=0.99)
+    schedule: dict | None = None
+    ab_profile: str | None = None
+    ab_share_pct: int | None = Field(default=None, ge=0, le=100)
+    turnstile: str | None = Field(default=None, max_length=64)
+
+
+class FalseAlarmIn(BaseModel):
+    is_false_alarm: bool
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class SnapshotOptions(BaseModel):
+    watermark: bool = True
+    blur_faces: bool = False
+
+
+class CameraScopeIn(BaseModel):
+    camera_ids: list[int] = Field(default_factory=list)
+
+
+class TotpCodeIn(BaseModel):
+    code: str = Field(..., min_length=6, max_length=16)
+
+
+class PasswordChangeIn(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=6, max_length=128)
+
+
+class PasswordOnlyIn(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=128)
+
+
+class NotificationSettingsIn(BaseModel):
+    enabled: bool | None = None
+    bot_token: str | None = Field(default=None, max_length=200)
+    director_chat_id: str | None = Field(default=None, max_length=64)
+    guard_chat_id: str | None = Field(default=None, max_length=64)
+    notify_weapon: bool | None = None
+    notify_bag: bool | None = None
+    notify_dog: bool | None = None
+    notify_offline: bool | None = None
+    notify_emergency: bool | None = None
+
+
+class RetentionPolicyIn(BaseModel):
+    days: int | None = Field(default=None, ge=1, le=3650)
+    max_gb: float | None = Field(default=None, ge=0.1, le=2048)
+    auto_clean: bool | None = None
+
+
+class BackupRestoreIn(BaseModel):
+    filename: str = Field(..., max_length=200)
+    confirm: str = Field(..., max_length=32)
+
+
+class EmergencyIn(BaseModel):
+    active: bool
+    reason: str = Field(default="", max_length=240)
+
+
+class VisitorPassIn(BaseModel):
+    full_name: str = Field(..., min_length=2, max_length=160)
+    organization: str = Field(default="", max_length=160)
+    purpose: str = Field(default="", max_length=240)
+    host: str = Field(default="", max_length=160)
+    phone: str = Field(default="", max_length=32)
+    valid_hours: int = Field(default=4, ge=1, le=72)
+    notes: str = Field(default="", max_length=500)
+
+
+class AccessEventIn(BaseModel):
+    person_name: str = Field(..., min_length=2, max_length=160)
+    person_kind: Literal["student", "staff", "teacher", "visitor"] = "visitor"
+    class_name: str = Field(default="", max_length=32)
+    turnstile: str = Field(default="Главный вход", max_length=64)
+    direction: Literal["in", "out"] = "in"
+    card_id: str = Field(default="", max_length=64)
