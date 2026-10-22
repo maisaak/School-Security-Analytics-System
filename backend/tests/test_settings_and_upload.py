@@ -59,6 +59,7 @@ def test_preferences_defaults_and_roundtrip(client, admin_headers):
     assert stored.status_code == 200
     assert stored.json()["kpis"] == ["cameras", "critical", "confidence"]
     assert stored.json()["compact_tables"] is True
+    assert stored.json()["updated_at"], "время сохранения должно возвращаться в GET"
 
     audit = client.get(
         "/api/audit", headers=admin_headers, params={"action": "settings.preferences.update"}

@@ -33,6 +33,7 @@ def load_preferences(user: User) -> dict:
     # Список KPI валидируем отдельно: старые записи могут содержать неизвестные ключи
     kpis = [k for k in merged.get("kpis") or [] if k in KPI_KEYS]
     merged["kpis"] = list(dict.fromkeys(kpis)) or base["kpis"]
+    merged["updated_at"] = stored.get("updated_at")
     return merged
 
 
@@ -56,11 +57,12 @@ def update_preferences(
     охрана может держать контрастную тему, а директор — светлую.
     """
     data = payload.model_dump()
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     db_user = db.query(User).filter(User.id == user.id).first()
     if db_user is None:
-        return PreferencesOut(**data)
+        return PreferencesOut(**data, updated_at=stamp)
 
-    db_user.preferences_json = json.dumps(data, ensure_ascii=False)
+    db_user.preferences_json = json.dumps({**data, "updated_at": stamp}, ensure_ascii=False)
     db.commit()
 
     record_audit(
@@ -78,4 +80,4 @@ def update_preferences(
         },
     )
 
-    return PreferencesOut(**data, updated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    return PreferencesOut(**data, updated_at=stamp)
