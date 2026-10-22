@@ -224,6 +224,16 @@ export const TrainingPage: React.FC = () => {
             <span className="chip">экспорт ONNX / TensorRT</span>
           </>
         }
+        actions={
+          <button
+            onClick={() =>
+              document.getElementById("upload-weights")?.scrollIntoView({ behavior: "smooth", block: "start" })
+            }
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-[11px] font-medium text-slate-200 transition hover:border-brand-500/40 hover:text-ink"
+          >
+            <Upload className="h-3.5 w-3.5" /> Загрузить свои веса
+          </button>
+        }
       />
 
       {error && <ErrorNotice message={error} onRetry={loadState} />}
@@ -409,6 +419,7 @@ export const TrainingPage: React.FC = () => {
           </SectionCard>
 
           <SectionCard
+            id="upload-weights"
             title="Загрузить свои веса (YOLO11 и др.)"
             subtitle="Чекпоинт Ultralytics .pt: архитектура, задача и классы определяются автоматически"
             icon={FileUp}

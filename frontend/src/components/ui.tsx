@@ -100,8 +100,19 @@ export const SectionCard: React.FC<{
   className?: string;
   bodyClassName?: string;
   flush?: boolean;
-}> = ({ title, subtitle, icon: Icon, actions, children, className = "", bodyClassName = "", flush = false }) => (
-  <section className={`panel border border-slate-800 rounded-2xl ${flush ? "" : "p-4 sm:p-5"} ${className}`}>
+  id?: string;
+}> = ({
+  title,
+  subtitle,
+  icon: Icon,
+  actions,
+  children,
+  className = "",
+  bodyClassName = "",
+  flush = false,
+  id,
+}) => (
+  <section id={id} className={`panel border border-slate-800 rounded-2xl ${flush ? "" : "p-4 sm:p-5"} ${className}`}>
     {(title || actions) && (
       <div
         className={`flex flex-wrap items-start justify-between gap-3 mb-4 ${

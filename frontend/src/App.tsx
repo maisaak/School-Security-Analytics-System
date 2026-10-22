@@ -76,7 +76,9 @@ const AppShellInner: React.FC = () => {
   // Ссылку на раздел можно отправить коллеге: #guard, #analytics и т.д.
   useEffect(() => {
     const onHashChange = () => {
-      const tab = readTabFromHash();
+      const raw = window.location.hash.replace(/^#/, "");
+      if (!(TAB_IDS as string[]).includes(raw)) return; // якоря внутри страницы не меняют раздел
+      const tab = raw as AppTab;
       if (permittedTabs.includes(tab)) setActiveTab(tab);
     };
     window.addEventListener("hashchange", onHashChange);
