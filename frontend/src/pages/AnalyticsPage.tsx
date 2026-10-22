@@ -30,7 +30,17 @@ import {
   Violation,
 } from "../api/client";
 import { VIOLATION_META } from "../components/ViolationsTable";
-import { ErrorNotice, formatDateTime, Pill, SectionCard, Spinner } from "../components/ui";
+import {
+  ErrorNotice,
+  formatDateTime,
+  KpiCard,
+  PageHeader,
+  Pill,
+  SectionCard,
+  Segmented,
+  SkeletonCards,
+  SkeletonPanel,
+} from "../components/ui";
 
 export const AnalyticsPage: React.FC = () => {
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -147,36 +157,54 @@ export const AnalyticsPage: React.FC = () => {
     ? dwellList.reduce((sum, v) => sum + (v.dwell_seconds ?? 0), 0) / dwellList.length
     : 0;
 
-  if (loading && !stats) return <Spinner label="Сбор аналитики…" />;
+  if (loading && !stats)
+    return (
+      <div className="space-y-5">
+        <PageHeader
+          eyebrow="Отчётность"
+          title="Аналитика безопасности"
+          description="Сводные показатели по инцидентам, камерам, трекингу и модели YOLOv8."
+          icon={BarChart3}
+          tone="sky"
+        />
+        <SkeletonCards />
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <SkeletonPanel rows={6} className="lg:col-span-2" />
+          <SkeletonPanel rows={6} />
+        </div>
+      </div>
+    );
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-ink flex items-center gap-2">
-            <BarChart3 className="w-5 h-5 text-sky-400" />
-            Аналитика безопасности
-          </h2>
-          <p className="text-[11px] text-slate-400">
-            Сводные показатели по инцидентам, камерам, трекингу и модели YOLOv8
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <select
+      <PageHeader
+        eyebrow="Отчётность"
+        title="Аналитика безопасности"
+        description="Сводные показатели по инцидентам, камерам, трекингу и модели YOLOv8 · SLA реакции охраны, теплокарта и отчёты за произвольный период."
+        icon={BarChart3}
+        tone="sky"
+        meta={
+          <>
+            <Pill tone="slate">
+              <Activity className="w-3 h-3" /> Записей в выборке: {scoped.length}
+            </Pill>
+            <Pill tone="emerald">Обновление каждые 6 секунд</Pill>
+          </>
+        }
+        actions={
+          <Segmented
+            ariaLabel="Период аналитики"
             value={rangeHours}
-            onChange={(e) => setRangeHours(Number(e.target.value))}
-            className="bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500"
-          >
-            <option value={1}>Последний час</option>
-            <option value={8}>Последние 8 часов</option>
-            <option value={24}>Последние 24 часа</option>
-            <option value={24 * 30}>Последние 30 дней</option>
-          </select>
-          <Pill tone="slate">
-            <Activity className="w-3 h-3" /> Записей в выборке: {scoped.length}
-          </Pill>
-        </div>
-      </div>
+            onChange={(value) => setRangeHours(Number(value))}
+            options={[
+              { value: 1, label: "1 ч" },
+              { value: 8, label: "8 ч" },
+              { value: 24, label: "24 ч" },
+              { value: 720, label: "30 дн" },
+            ]}
+          />
+        }
+      />
 
       {error && <ErrorNotice message={error} onRetry={load} />}
 
@@ -187,40 +215,31 @@ export const AnalyticsPage: React.FC = () => {
             value: scoped.length,
             sub: `из ${stats?.total_violations ?? 0} в архиве`,
             icon: AlertTriangle,
-            tone: "text-amber-400 bg-amber-500/10 border-amber-500/25",
+            tone: "amber" as const,
           },
           {
             title: "Неподтверждённые",
             value: scoped.filter((v) => !v.is_acknowledged).length,
             sub: "требуют реакции охраны",
             icon: Clock,
-            tone: "text-red-400 bg-red-500/10 border-red-500/25",
+            tone: "red" as const,
           },
           {
             title: "Среднее время реакции",
             value: responseTime === null ? "—" : `${responseTime.toFixed(0)} с`,
             sub: "от детекции до подтверждения",
             icon: Timer,
-            tone: "text-emerald-400 bg-emerald-500/10 border-emerald-500/25",
+            tone: "emerald" as const,
           },
           {
             title: "Средняя выдержка",
             value: `${avgDwell.toFixed(1)} с`,
             sub: `порог тревоги ${(stats?.tracking.dwell_threshold_sec ?? 6).toFixed(0)} с`,
             icon: Hourglass,
-            tone: "text-sky-400 bg-sky-500/10 border-sky-500/25",
+            tone: "sky" as const,
           },
-        ].map(({ title, value, sub, icon: Icon, tone }) => (
-          <div key={title} className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[11px] text-slate-400">{title}</p>
-              <p className="text-2xl font-bold text-ink mt-1">{value}</p>
-              <p className="text-[10px] text-slate-500 mt-1">{sub}</p>
-            </div>
-            <div className={`p-2.5 rounded-xl border shrink-0 ${tone}`}>
-              <Icon className="w-4 h-4" />
-            </div>
-          </div>
+        ].map(({ title, value, sub, icon, tone }) => (
+          <KpiCard key={title} label={title} value={value} hint={sub} icon={icon} tone={tone} />
         ))}
       </div>
 
@@ -614,7 +633,7 @@ export const AnalyticsPage: React.FC = () => {
                 { label: "Медианная уверенность", value: quality.median_confidence !== null ? Math.round(quality.median_confidence * 100) : null, suffix: "%" },
                 { label: "Подтверждено охраной", value: quality.ack_rate, suffix: "%" },
               ].map((item) => (
-                <div key={item.label} className="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2.5">
+                <div key={item.label} className="rounded-xl border border-slate-800/70 bg-slate-950/40 px-3 py-2.5">
                   <p className="text-[10px] text-slate-500">{item.label}</p>
                   <p className="text-lg font-semibold text-ink">
                     {item.value ?? "—"}

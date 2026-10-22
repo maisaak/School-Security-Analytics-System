@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Plus, RefreshCw, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Plus, RefreshCw, Video, X } from "lucide-react";
 import { api, Camera, DashboardStats, DetectorProfile, Violation } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { StatsOverview } from "../components/StatsOverview";
@@ -9,7 +9,7 @@ import { CameraStream } from "../components/CameraStream";
 import { VIOLATION_META, ViolationFilters, ViolationsTable } from "../components/ViolationsTable";
 import { CameraPolicyModal } from "../components/CameraPolicyModal";
 import { VideoModal } from "../components/VideoModal";
-import { ErrorNotice } from "../components/ui";
+import { EmptyState, ErrorNotice, PageHeader, Pill } from "../components/ui";
 
 interface DashboardPageProps {
   onGlobalStatsUpdate: (stats: DashboardStats) => void;
@@ -142,6 +142,45 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
 
   return (
     <div className="space-y-6">
+      <PageHeader
+        eyebrow="Наблюдение"
+        title="Мониторинг и инциденты"
+        description="Видеостена реального времени, состояние камер и журнал нарушений с тревогами, аналитикой и выгрузкой улик."
+        icon={Video}
+        tone="brand"
+        meta={
+          <>
+            <Pill tone="emerald">
+              Камеры онлайн: {stats?.active_cameras ?? 0} / {stats?.total_cameras ?? 0}
+            </Pill>
+            <Pill tone={(stats?.unacknowledged_violations ?? 0) > 0 ? "amber" : "slate"}>
+              Неподтверждённых: {stats?.unacknowledged_violations ?? 0}
+            </Pill>
+            <Pill tone="slate">Всего нарушений: {stats?.total_violations ?? 0}</Pill>
+          </>
+        }
+        actions={
+          <div className="flex items-center gap-2">
+            <button
+              onClick={fetchAll}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-800 bg-slate-900 text-[11px] font-medium text-slate-300 transition hover:border-slate-700 hover:bg-slate-800"
+              title="Обновить данные"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Обновить
+            </button>
+            {can("cameras:manage") && (
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-3.5 py-2 text-xs font-medium text-white shadow-sm shadow-brand-900/40 transition hover:bg-brand-500"
+              >
+                <Plus className="w-4 h-4" />
+                Добавить камеру
+              </button>
+            )}
+          </div>
+        }
+      />
+
       {latestAlert && (
         <div className="tinted-red bg-red-950/80 border border-red-500/50 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-lg">
           <div className="flex items-center gap-3">
@@ -200,33 +239,33 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
       <StatsOverview stats={stats} />
 
       <section className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h2 className="text-base sm:text-lg font-semibold text-ink">Видеостена реального времени</h2>
+            <h2 className="text-base font-semibold tracking-tight text-ink">Видеостена реального времени</h2>
             <p className="text-[11px] text-slate-400">
               RTSP → HLS (H.264) с детекцией поверх кадра · MJPEG-фолбэк · трекинг бесхозных предметов с таймером выдержки
             </p>
           </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={fetchAll}
-              className="p-2 rounded-xl bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300 transition"
-              title="Обновить данные"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
-            {can("cameras:manage") && (
-              <button
-                onClick={() => setShowAddModal(true)}
-                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-medium text-white transition shadow-sm"
-              >
-                <Plus className="w-4 h-4" />
-                Добавить камеру
-              </button>
-            )}
-          </div>
+          <span className="chip chip-live">потоки активны</span>
         </div>
+
+        {cameras.length === 0 && !error && (
+          <EmptyState
+            icon={Video}
+            title="Камеры ещё не подключены"
+            description="Добавьте RTSP-поток или включите тестовую камеру — видеостена и журнал нарушений появятся автоматически."
+            action={
+              can("cameras:manage") ? (
+                <button
+                  onClick={() => setShowAddModal(true)}
+                  className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-3.5 py-2 text-xs font-medium text-white transition hover:bg-brand-500"
+                >
+                  <Plus className="w-4 h-4" /> Добавить камеру
+                </button>
+              ) : undefined
+            }
+          />
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {cameras.map((cam) => (

@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { api, Role, User } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import { ErrorNotice, formatDateTime, Pill, SectionCard, Spinner } from "../components/ui";
+import { ErrorNotice, formatDateTime, PageHeader, Pill, SectionCard, Spinner } from "../components/ui";
 
 const ROLE_META: Record<Role, { label: string; icon: React.ElementType; tone: "emerald" | "sky" | "amber" }> = {
   admin: { label: "Администратор", icon: Shield, tone: "emerald" },
@@ -138,24 +138,28 @@ export const UsersPage: React.FC = () => {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-ink flex items-center gap-2">
-            <Users className="w-5 h-5 text-emerald-400" />
-            Управление пользователями
-          </h2>
-          <p className="text-[11px] text-slate-400">
-            Три роли с разграничением прав. Каждое изменение фиксируется в журнале аудита.
-          </p>
-        </div>
-        <button
-          onClick={() => setShowCreate((v) => !v)}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-[11px] font-medium text-white transition"
-        >
-          {showCreate ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
-          {showCreate ? "Отмена" : "Новый пользователь"}
-        </button>
-      </div>
+      <PageHeader
+        eyebrow="Система"
+        title="Управление пользователями"
+        description="Три роли с разграничением прав: администратор, директор и охранник КПП. Каждое изменение фиксируется в журнале аудита."
+        icon={Users}
+        tone="emerald"
+        meta={
+          <>
+            <Pill tone="slate">Учётных записей: {users.length}</Pill>
+            <Pill tone="emerald">Администраторов: {users.filter((u) => u.role === "admin").length}</Pill>
+          </>
+        }
+        actions={
+          <button
+            onClick={() => setShowCreate((v) => !v)}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-brand-600 px-3.5 py-2 text-[11px] font-medium text-white shadow-sm shadow-brand-900/40 transition hover:bg-brand-500"
+          >
+            {showCreate ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+            {showCreate ? "Отмена" : "Новый пользователь"}
+          </button>
+        }
+      />
 
       {error && <ErrorNotice message={error} onRetry={load} />}
       {notice && (
@@ -226,7 +230,7 @@ export const UsersPage: React.FC = () => {
           const meta = ROLE_META[role];
           const Icon = meta.icon;
           return (
-            <div key={role} className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5">
+            <div key={role} className="panel border border-slate-800 rounded-2xl p-3.5">
               <div className="flex items-center gap-2 mb-2">
                 <Icon className={`w-4 h-4 ${role === "admin" ? "text-emerald-400" : role === "director" ? "text-sky-400" : "text-amber-400"}`} />
                 <span className="text-xs font-semibold text-ink">{meta.label}</span>

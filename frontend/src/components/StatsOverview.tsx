@@ -1,18 +1,19 @@
 import React from "react";
 import { AlertTriangle, Cpu, Gauge, Hourglass, Shield, ShieldAlert, Video } from "lucide-react";
 import { DashboardStats, KpiKey } from "../api/client";
+import { KpiCard, Skeleton, SkeletonCards, Tone } from "./ui";
 import { usePrefs } from "../prefs/PrefsContext";
 
 interface StatsOverviewProps {
   stats: DashboardStats | null;
 }
 
-interface KpiCard {
+interface KpiDefinition {
   title: string;
   value: string;
   sub: string;
   icon: React.ElementType;
-  accent: string;
+  tone: Tone;
 }
 
 export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats }) => {
@@ -25,20 +26,20 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats }) => {
   const dwell = stats?.tracking?.dwell_threshold_sec ?? 6;
   const confidence = stats?.average_confidence ?? 0;
 
-  const cardsByKey: Record<KpiKey, KpiCard> = {
+  const cardsByKey: Record<KpiKey, KpiDefinition> = {
     cameras: {
       title: "Камеры онлайн",
       value: stats ? `${stats.active_cameras} / ${stats.total_cameras}` : "—",
       sub: "HLS-потоки с инференсом YOLO",
       icon: Video,
-      accent: "text-brand-400 bg-brand-500/10 border-brand-500/25",
+      tone: "brand",
     },
     violations: {
       title: "Зафиксировано нарушений",
       value: stats ? String(stats.total_violations) : "—",
       sub: stats ? `Ожидают проверки: ${stats.unacknowledged_violations}` : "Журнал событий",
       icon: AlertTriangle,
-      accent: "text-amber-400 bg-amber-500/10 border-amber-500/25",
+      tone: "amber",
     },
     critical: {
       title: "Критические инциденты",
@@ -47,7 +48,7 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats }) => {
         ? `Оружие: ${weaponCount} · бесхозные сумки: ${bagCount}`
         : "Оружие и бесхозные предметы",
       icon: ShieldAlert,
-      accent: "text-red-400 bg-red-500/10 border-red-500/25",
+      tone: "red",
     },
     dwell: {
       title: "Выдержка бесхозных",
@@ -56,7 +57,7 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats }) => {
         ? `В удержании: ${stats.tracking.bag_tracks_active} · ср. выдержка ${stats.tracking.avg_dwell_seconds.toFixed(1)} с`
         : "ByteTrack + таймер",
       icon: Hourglass,
-      accent: "text-sky-400 bg-sky-500/10 border-sky-500/25",
+      tone: "sky",
     },
     latency: {
       title: "Задержка инференса",
@@ -65,14 +66,14 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats }) => {
         ? `${stats.model.production_version} · mAP@50 ${(stats.model.production_map50 * 100).toFixed(1)}%`
         : "Готов к анализу кадров",
       icon: Cpu,
-      accent: "text-brand-400 bg-brand-500/10 border-brand-500/25",
+      tone: "brand",
     },
     confidence: {
       title: "Уверенность модели",
       value: stats && confidence > 0 ? `${(confidence * 100).toFixed(1)}%` : "—",
       sub: "Средняя уверенность детекций",
       icon: Gauge,
-      accent: "text-emerald-400 bg-emerald-500/10 border-emerald-500/25",
+      tone: "emerald",
     },
   };
 
@@ -89,30 +90,40 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats }) => {
   const maxBucket = Math.max(1, ...(stats?.timeline?.map((b) => b.count) ?? [1]));
   const showTimeline = prefs.show_timeline;
 
+  if (!stats) {
+    return (
+      <div className="space-y-4">
+        <SkeletonCards count={Math.max(2, prefs.kpis.length)} />
+        <div className="grid grid-cols-1 gap-3.5 lg:grid-cols-3">
+          <div className="panel rounded-2xl border border-slate-800 p-4 lg:col-span-2">
+            <Skeleton className="h-3 w-56" />
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              {[0, 1, 2].map((index) => (
+                <Skeleton key={index} className="h-16 w-full" />
+              ))}
+            </div>
+          </div>
+          <div className="panel rounded-2xl border border-slate-800 p-4">
+            <Skeleton className="h-3 w-40" />
+            <Skeleton className="mt-4 h-20 w-full" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className={`grid grid-cols-1 sm:grid-cols-2 ${gridCols} gap-3.5`}>
-        {cards.map(({ title, value, sub, icon: Icon, accent }) => (
-          <div
-            key={title}
-            className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 flex items-start justify-between gap-3"
-          >
-            <div className="min-w-0">
-              <p className="text-[11px] font-medium text-slate-400">{title}</p>
-              <p className="text-2xl font-bold text-ink mt-1 tracking-tight">{value}</p>
-              <p className="text-[10px] text-slate-500 mt-1 leading-snug">{sub}</p>
-            </div>
-            <div className={`p-2.5 rounded-xl border shrink-0 ${accent}`}>
-              <Icon className="w-4 h-4" />
-            </div>
-          </div>
+        {cards.map(({ title, value, sub, icon, tone }) => (
+          <KpiCard key={title} label={title} value={value} hint={sub} icon={icon} tone={tone} />
         ))}
       </div>
 
       {stats && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
           <div
-            className={`bg-slate-900/90 border border-slate-800 rounded-2xl p-4 ${
+            className={`panel border border-slate-800 rounded-2xl p-4 ${
               showTimeline ? "lg:col-span-2" : "lg:col-span-3"
             }`}
           >
@@ -128,7 +139,7 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats }) => {
                 { label: "Бесхозные сумки", count: bagCount, bar: "bg-amber-500" },
                 { label: "Собаки на территории", count: dogCount, bar: "bg-orange-500" },
               ].map((item) => (
-                <div key={item.label} className="bg-slate-950/70 rounded-xl p-3 border border-slate-800/80">
+                <div key={item.label} className="rounded-xl border border-slate-800/70 bg-slate-950/50 p-3">
                   <div className="flex justify-between text-[11px] mb-2">
                     <span className="text-slate-300 font-medium">{item.label}</span>
                     <span className="font-mono font-semibold text-ink">{item.count}</span>
@@ -156,7 +167,7 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats }) => {
           </div>
 
           {showTimeline && (
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between">
+            <div className="panel border border-slate-800 rounded-2xl p-4 flex flex-col justify-between">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
                   Динамика событий (40 мин)

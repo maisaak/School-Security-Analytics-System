@@ -240,11 +240,15 @@ export const EventToasts: React.FC = () => {
   const { toasts, dismissToast } = useLiveEvents();
   if (toasts.length === 0) return null;
   return (
-    <div className="fixed z-[60] right-2 sm:right-4 top-[4.6rem] sm:top-20 w-[min(92vw,22rem)] space-y-2 pointer-events-none">
+    <div
+      aria-live="polite"
+      aria-atomic="false"
+      className="fixed z-[60] right-2 sm:right-4 top-[4.6rem] sm:top-20 w-[min(92vw,22rem)] space-y-2 pointer-events-none"
+    >
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className={`pointer-events-auto rounded-2xl border shadow-2xl p-3 flex items-start gap-2.5 backdrop-blur ${TOAST_STYLE[toast.kind]}`}
+          className={`fade-up pointer-events-auto rounded-2xl border shadow-2xl p-3 flex items-start gap-2.5 backdrop-blur ${TOAST_STYLE[toast.kind]}`}
         >
           <div className="mt-0.5 shrink-0">
             {toast.kind === "weapon" ? (

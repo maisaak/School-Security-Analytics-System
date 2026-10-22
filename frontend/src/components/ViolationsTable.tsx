@@ -113,7 +113,7 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
   };
 
   return (
-    <section className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
+    <section className="panel border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-sm sm:text-base font-semibold text-ink">Журнал зафиксированных нарушений</h2>
@@ -252,9 +252,9 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
         </label>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className={`w-full text-sm text-left ${prefs.compact_tables ? "compact-table" : ""}`}>
-          <thead className="text-[10px] uppercase tracking-wider text-slate-400 border-b border-slate-800">
+      <div className="max-h-[70vh] overflow-auto rounded-xl border border-slate-800/70">
+        <table className={`w-full min-w-[760px] text-left text-sm ${prefs.compact_tables ? "compact-table" : ""}`}>
+          <thead className="sticky top-0 z-10 bg-slate-900 text-[10px] uppercase tracking-wider text-slate-400 border-b border-slate-800">
             <tr>
               <th className="py-3 px-2">Кадр</th>
               <th className="py-3 px-2">Класс угрозы</th>
@@ -277,7 +277,7 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
               violations.map((v) => {
                 const meta = VIOLATION_META[v.violation_type] ?? VIOLATION_META.suspicious_bag;
                 return (
-                  <tr key={v.id} className="hover:bg-slate-800/40 transition">
+                  <tr key={v.id} className="group/row transition hover:bg-slate-800/35">
                     <td className="py-3 px-2">
                       <button
                         onClick={() => onOpenVideo(v)}

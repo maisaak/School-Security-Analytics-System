@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { api, AuditEntry, AuditPage as AuditPageData, AuditSummary } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import { ErrorNotice, formatDateTime, Pill, SectionCard, Spinner } from "../components/ui";
+import { ErrorNotice, formatDateTime, KpiCard, PageHeader, Pill, SectionCard, Spinner } from "../components/ui";
 
 const OUTCOME_META: Record<string, { label: string; tone: "emerald" | "red" | "amber" }> = {
   success: { label: "успех", tone: "emerald" },
@@ -93,48 +93,46 @@ export const AuditPage: React.FC = () => {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-ink flex items-center gap-2">
-            <ScrollText className="w-5 h-5 text-brand-400" />
-            Полный журнал аудита
-          </h2>
-          <p className="text-[11px] text-slate-400">
-            Все действия пользователей и системы. Логины, пароли и креды RTSP в журнале маскируются.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={load}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 hover:bg-slate-800 text-[11px] text-slate-300 transition"
-          >
-            <RefreshCw className="w-3.5 h-3.5" /> Обновить
-          </button>
-          {can("audit:view") && (
-            <a
-              href={api.auditExportUrl}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-[11px] font-medium text-white transition"
+      <PageHeader
+        eyebrow="Система"
+        title="Полный журнал аудита"
+        description="Все действия пользователей и системы. Логины, пароли и креды RTSP в журнале маскируются."
+        icon={ScrollText}
+        tone="brand"
+        meta={
+          <>
+            <Pill tone="slate">Найдено записей: {data?.total ?? 0}</Pill>
+            <Pill tone="emerald">Обновление каждые 30 секунд</Pill>
+          </>
+        }
+        actions={
+          <div className="flex items-center gap-2">
+            <button
+              onClick={load}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-[11px] text-slate-300 transition hover:border-slate-700 hover:bg-slate-800"
             >
-              <Download className="w-3.5 h-3.5" /> Экспорт CSV
-            </a>
-          )}
-        </div>
-      </div>
+              <RefreshCw className="w-3.5 h-3.5" /> Обновить
+            </button>
+            {can("audit:view") && (
+              <a
+                href={api.auditExportUrl}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-brand-600 px-3 py-2 text-[11px] font-medium text-white transition hover:bg-brand-500"
+              >
+                <Download className="w-3.5 h-3.5" /> Экспорт CSV
+              </a>
+            )}
+          </div>
+        }
+      />
 
       {summary && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {[
-            { label: "Всего событий", value: summary.total, icon: Activity, tone: "text-brand-400" },
-            { label: "За сегодня", value: summary.today, icon: ShieldCheck, tone: "text-emerald-400" },
-            { label: "Отказов в доступе", value: summary.denied, icon: ShieldAlert, tone: "text-red-400" },
-          ].map(({ label, value, icon: Icon, tone }) => (
-            <div key={label} className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 flex items-center gap-3">
-              <Icon className={`w-5 h-5 ${tone}`} />
-              <div>
-                <p className="text-[11px] text-slate-400">{label}</p>
-                <p className="text-xl font-bold text-ink">{value}</p>
-              </div>
-            </div>
+            { label: "Всего событий", value: summary.total, icon: Activity, tone: "brand" as const },
+            { label: "За сегодня", value: summary.today, icon: ShieldCheck, tone: "emerald" as const },
+            { label: "Отказов в доступе", value: summary.denied, icon: ShieldAlert, tone: "red" as const },
+          ].map(({ label, value, icon, tone }) => (
+            <KpiCard key={label} label={label} value={value} icon={icon} tone={tone} />
           ))}
         </div>
       )}

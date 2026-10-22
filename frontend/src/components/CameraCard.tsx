@@ -40,10 +40,10 @@ export const CameraCard: React.FC<CameraCardProps> = ({
 
   return (
     <div
-      className={`bg-slate-900 rounded-2xl border overflow-hidden transition ${
+      className={`panel rounded-2xl border overflow-hidden transition duration-200 ${
         hasThreat
           ? "border-red-500/80 ring-2 ring-red-500/25"
-          : "border-slate-800 hover:border-slate-700"
+          : "border-slate-800 hover:-translate-y-0.5 hover:border-brand-500/40 hover:shadow-xl hover:shadow-black/20"
       }`}
     >
       <div className="aspect-video bg-slate-950 relative group">

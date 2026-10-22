@@ -30,7 +30,7 @@ import {
   ViolationType,
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import { ErrorNotice, formatBytes, formatDateTime, Pill, SectionCard } from "../components/ui";
+import { ErrorNotice, formatBytes, formatDateTime, PageHeader, Pill, SectionCard } from "../components/ui";
 
 const STATUS_META: Record<string, { label: string; tone: "emerald" | "red" | "amber" | "slate" | "indigo" }> = {
   production: { label: "боевая", tone: "emerald" },
@@ -211,16 +211,20 @@ export const TrainingPage: React.FC = () => {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="text-lg font-semibold text-ink flex items-center gap-2">
-          <BrainCircuit className="w-5 h-5 text-brand-400" />
-          Модели YOLO: дообучение, загрузка весов и реестр версий
-        </h2>
-        <p className="text-[11px] text-slate-400">
-          Подключите YOLO11 (или другую архитектуру) загрузкой .pt · Validation Gate не пропускает в production версии
-          с падением mAP@50 · доступен откат на любую версию реестра
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Модели и данные"
+        title="Модели YOLO: дообучение, загрузка весов и реестр версий"
+        description="Подключите YOLO11 или другую архитектуру загрузкой .pt · Validation Gate не пропускает в production версии с падением mAP@50 · откат на любую версию реестра."
+        icon={BrainCircuit}
+        tone="brand"
+        meta={
+          <>
+            <span className="chip">YOLOv8 · YOLO11</span>
+            <span className="chip">Validation Gate</span>
+            <span className="chip">экспорт ONNX / TensorRT</span>
+          </>
+        }
+      />
 
       {error && <ErrorNotice message={error} onRetry={loadState} />}
       {notice && (

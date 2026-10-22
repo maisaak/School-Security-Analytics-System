@@ -24,7 +24,7 @@ import { useLiveEvents } from "../components/LiveEvents";
 import { CameraStream } from "../components/CameraStream";
 import { VIOLATION_META } from "../components/ViolationsTable";
 import { VideoModal } from "../components/VideoModal";
-import { EmptyState, ErrorNotice, formatDateTime, Pill, SectionCard } from "../components/ui";
+import { EmptyState, ErrorNotice, formatDateTime, PageHeader, Pill, SectionCard } from "../components/ui";
 
 interface GuardPageProps {
   onGlobalStatsUpdate: (stats: DashboardStats) => void;
@@ -180,28 +180,29 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-ink flex items-center gap-2">
-            <ShieldAlert className="w-5 h-5 text-amber-400" />
-            Рабочее место охранника КПП
-          </h2>
-          <p className="text-[11px] text-slate-400">
-            Видеостена, тревоги и подтверждение отработки · live-лента событий и SLA смены
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {critical.length > 0 && (
-            <Pill tone="red" className="animate-pulse">
-              <ShieldAlert className="w-3 h-3" />
-              КРИТИЧЕСКИХ ТРЕВОГ: {critical.length}
+      <PageHeader
+        eyebrow="Пост охраны"
+        title="Рабочее место охранника КПП"
+        description="Видеостена, тревоги и подтверждение отработки · live-лента событий и SLA смены."
+        icon={ShieldAlert}
+        tone="amber"
+        meta={
+          <>
+            {critical.length > 0 && (
+              <Pill tone="red" className="animate-pulse">
+                <ShieldAlert className="w-3 h-3" />
+                КРИТИЧЕСКИХ ТРЕВОГ: {critical.length}
+              </Pill>
+            )}
+            <Pill tone={pending.length ? "amber" : "emerald"}>
+              <AlarmClock className="w-3 h-3" />
+              Неподтверждённых: {pending.length}
             </Pill>
-          )}
-          <Pill tone={pending.length ? "amber" : "emerald"}>
-            <AlarmClock className="w-3 h-3" />
-            Неподтверждённых: {pending.length}
-          </Pill>
+            {sla && <Pill tone="slate">Средняя реакция: {sla.avg_latency_sec ?? "—"} с</Pill>}
+          </>
+        }
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => setSoundOn((v) => !v)}
             className="p-2 rounded-xl bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300 transition"
@@ -229,8 +230,9 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
               <Siren className="w-4 h-4" /> {emergency.active ? "Тревога" : "Эвакуация"}
             </button>
           )}
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {error && <ErrorNotice message={error} onRetry={load} />}
 
@@ -242,7 +244,7 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
             { label: "Просрочено SLA", value: sla.overdue_count, suffix: `из ${sla.measured}`, tone: sla.overdue_count ? "text-red-300" : "text-emerald-300" },
             { label: "Ожидают", value: sla.pending, suffix: "тревог", tone: sla.pending ? "text-amber-300" : "text-emerald-300" },
           ].map((card) => (
-            <div key={card.label} className="rounded-2xl border border-slate-800 bg-slate-900/80 px-3 py-2.5">
+            <div key={card.label} className="panel rounded-2xl border border-slate-800 px-3 py-2.5">
               <p className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1">
                 <Timer className="w-3 h-3" /> {card.label}
               </p>

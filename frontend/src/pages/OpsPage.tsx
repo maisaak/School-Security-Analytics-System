@@ -28,7 +28,17 @@ import {
   RetentionPolicy,
   WatchdogStatus,
 } from "../api/client";
-import { ErrorNotice, formatBytes, formatDateTime, Pill, SectionCard, Spinner } from "../components/ui";
+import {
+  ErrorNotice,
+  formatBytes,
+  formatDateTime,
+  KpiCard,
+  PageHeader,
+  Pill,
+  SectionCard,
+  SkeletonCards,
+  SkeletonPanel,
+} from "../components/ui";
 
 const TOGGLE_FIELDS: { key: keyof NotificationSettings; label: string }[] = [
   { key: "notify_weapon", label: "Оружие — всем получателям" },
@@ -166,31 +176,46 @@ export const OpsPage: React.FC = () => {
       return `Экспорт готов: ${result.filename} (${result.size_mb} МБ)`;
     });
 
-  if (loading && !overview) return <Spinner label="Собираем состояние системы…" />;
+  if (loading && !overview)
+    return (
+      <div className="space-y-5">
+        <PageHeader
+          eyebrow="Система"
+          title="Эксплуатация и надёжность"
+          description="Watchdog камер, политика хранения, резервное копирование, Telegram-уведомления и метрики."
+          icon={Wrench}
+          tone="sky"
+        />
+        <SkeletonCards />
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <SkeletonPanel rows={5} />
+          <SkeletonPanel rows={5} />
+        </div>
+      </div>
+    );
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-ink flex items-center gap-2">
-            <Wrench className="w-5 h-5 text-sky-400" /> Эксплуатация и надёжность
-          </h2>
-          <p className="text-[11px] text-slate-400">
-            Watchdog камер, политика хранения, резервное копирование, Telegram-уведомления и метрики
-          </p>
-        </div>
-        {overview && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Pill tone="sky">v{overview.version}</Pill>
-            <Pill tone={overview.watchdog.enabled ? "emerald" : "amber"}>
-              Watchdog {overview.watchdog.enabled ? "включён" : "выключен"}
-            </Pill>
-            <Pill tone={overview.metrics.enabled ? "emerald" : "slate"}>
-              Prometheus {overview.metrics.enabled ? "on" : "off"}
-            </Pill>
-          </div>
-        )}
-      </div>
+      <PageHeader
+        eyebrow="Система"
+        title="Эксплуатация и надёжность"
+        description="Watchdog камер, политика хранения, резервное копирование, Telegram-уведомления и метрики Prometheus."
+        icon={Wrench}
+        tone="sky"
+        meta={
+          overview && (
+            <>
+              <Pill tone="sky">v{overview.version}</Pill>
+              <Pill tone={overview.watchdog.enabled ? "emerald" : "amber"}>
+                Watchdog {overview.watchdog.enabled ? "включён" : "выключен"}
+              </Pill>
+              <Pill tone={overview.metrics.enabled ? "emerald" : "slate"}>
+                Prometheus {overview.metrics.enabled ? "on" : "off"}
+              </Pill>
+            </>
+          )
+        }
+      />
 
       {error && <ErrorNotice message={error} onRetry={load} />}
       {notice && (
@@ -206,17 +231,15 @@ export const OpsPage: React.FC = () => {
             { label: "Медиа", value: `${overview.media.usage_mb} МБ`, sub: `квота ${overview.media.quota_mb} МБ`, icon: ArchiveRestore },
             { label: "Резервные копии", value: overview.backups.count, sub: overview.backups.latest ? formatDateTime(new Date(overview.backups.latest * 1000).toISOString()) : "ещё нет", icon: DatabaseBackup },
             { label: "SSE-подписчики", value: overview.events.subscribers, sub: `событий опубликовано: ${overview.events.published}`, icon: Radio },
-          ].map(({ label, value, sub, icon: Icon }) => (
-            <div key={label} className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="text-[11px] text-slate-400">{label}</p>
-                <p className="text-xl font-bold text-ink mt-1 truncate">{value}</p>
-                <p className="text-[10px] text-slate-500 truncate">{sub}</p>
-              </div>
-              <div className="p-2 rounded-xl border border-slate-700 bg-slate-800/50 text-sky-300 shrink-0">
-                <Icon className="w-4 h-4" />
-              </div>
-            </div>
+          ].map(({ label, value, sub, icon }, index) => (
+            <KpiCard
+              key={label}
+              label={label}
+              value={value}
+              hint={sub}
+              icon={icon}
+              tone={(["brand", "sky", "emerald", "amber"] as const)[index % 4]}
+            />
           ))}
         </div>
       )}

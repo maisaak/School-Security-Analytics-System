@@ -1,7 +1,8 @@
 import React, { useState } from "react";
-import { CheckCircle2, FileVideo, ImageIcon, Upload } from "lucide-react";
+import { CheckCircle2, FileVideo, ImageIcon, ScanEye, Upload } from "lucide-react";
 import { AnalyzeUploadResult, api } from "../api/client";
 import { VIOLATION_META } from "../components/ViolationsTable";
+import { PageHeader } from "../components/ui";
 
 export const LabPage: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -25,14 +26,30 @@ export const LabPage: React.FC = () => {
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-      <div className="lg:col-span-5 bg-slate-900/90 border border-slate-800 rounded-2xl p-6 space-y-5">
+    <div className="space-y-5">
+      <PageHeader
+        eyebrow="Материалы"
+        title="Проверка медиафайлов"
+        description="Загрузите фотографию или видеоролик, чтобы прогнать кадр через ансамбль YOLOv8 и увидеть разметку угроз до попадания в журнал нарушений."
+        icon={ScanEye}
+        tone="indigo"
+        meta={
+          <>
+            <span className="chip">.jpg · .png · .mp4</span>
+            <span className="chip">разметка угроз на кадре</span>
+            <span className="chip">регистрация в журнале по желанию</span>
+          </>
+        }
+      />
+
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
+      <div className="panel rounded-2xl border border-slate-800 p-5 space-y-5 sm:p-6 lg:col-span-5">
         <div>
-          <h2 className="text-lg font-semibold text-ink">Лаборатория проверки медиафайлов</h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Загрузите фотографию (<code className="text-brand-300">.jpg</code>,{" "}
-            <code className="text-brand-300">.png</code>) или видеоролик (
-            <code className="text-brand-300">.mp4</code>), чтобы протестировать ансамбль YOLOv8
+          <h2 className="text-sm font-semibold text-ink">Файл для проверки</h2>
+          <p className="mt-1 text-xs text-slate-400">
+            Поддерживаются <code className="text-brand-300">.jpg</code>,{" "}
+            <code className="text-brand-300">.png</code> и <code className="text-brand-300">.mp4</code> — детекция
+            собак, оружия, бесхозных сумок и присутствия владельца.
           </p>
         </div>
 
@@ -82,7 +99,7 @@ export const LabPage: React.FC = () => {
         )}
       </div>
 
-      <div className="lg:col-span-7 bg-slate-900/90 border border-slate-800 rounded-2xl p-6 space-y-4">
+      <div className="panel rounded-2xl border border-slate-800 p-5 space-y-4 sm:p-6 lg:col-span-7">
         <div className="flex items-center justify-between">
           <h3 className="text-base font-semibold text-ink">Результат инференса YOLOv8</h3>
           {result?.latency_ms !== undefined && (
@@ -145,6 +162,7 @@ export const LabPage: React.FC = () => {
             )}
           </div>
         )}
+      </div>
       </div>
     </div>
   );

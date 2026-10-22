@@ -116,7 +116,7 @@ export const LoginPage: React.FC = () => {
   const message = localError || error;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 relative overflow-hidden">
+    <div className="min-h-screen app-backdrop text-slate-100 relative overflow-hidden">
       <div className="pointer-events-none absolute inset-0">
         <div className="absolute -top-40 -left-32 w-[520px] h-[520px] rounded-full bg-emerald-500/10 blur-3xl" />
         <div className="absolute top-1/3 -right-40 w-[560px] h-[560px] rounded-full bg-brand-500/10 blur-3xl" />

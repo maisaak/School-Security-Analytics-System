@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Loader2, ShieldCheck } from "lucide-react";
+import { Activity, Cpu, Loader2, ShieldCheck } from "lucide-react";
 import { api, DashboardStats, SystemStatus } from "./api/client";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { AppTab, Navbar } from "./components/Navbar";
@@ -27,11 +27,19 @@ const TAB_PERMISSION: Record<AppTab, string> = {
   audit: "audit:view",
 };
 
+const TAB_IDS = Object.keys(TAB_PERMISSION) as AppTab[];
+
+const readTabFromHash = (): AppTab => {
+  if (typeof window === "undefined") return "dashboard";
+  const hash = window.location.hash.replace(/^#/, "");
+  return (TAB_IDS as string[]).includes(hash) ? (hash as AppTab) : "dashboard";
+};
+
 const AppShellInner: React.FC = () => {
   const { user, can } = useAuth();
   const { prefs } = usePrefs();
   const navSpace = prefs.mobile_bottom_nav ? "mobile-nav-space" : "";
-  const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
+  const [activeTab, setActiveTab] = useState<AppTab>(readTabFromHash);
   const [globalStats, setGlobalStats] = useState<DashboardStats | null>(null);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -58,8 +66,31 @@ const AppShellInner: React.FC = () => {
     api.getSystemStatus().then(setSystemStatus).catch(() => {});
   }, [activeTab]);
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    if (window.location.hash !== `#${activeTab}`) {
+      window.history.replaceState(null, "", `#${activeTab}`);
+    }
+  }, [activeTab]);
+
+  // Ссылку на раздел можно отправить коллеге: #guard, #analytics и т.д.
+  useEffect(() => {
+    const onHashChange = () => {
+      const tab = readTabFromHash();
+      if (permittedTabs.includes(tab)) setActiveTab(tab);
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, [permittedTabs]);
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+    <div className="app-backdrop min-h-screen text-slate-100">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[70] focus:rounded-xl focus:bg-brand-600 focus:px-3 focus:py-2 focus:text-xs focus:font-medium focus:text-white"
+      >
+        Перейти к содержимому
+      </a>
       <Navbar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
@@ -69,47 +100,63 @@ const AppShellInner: React.FC = () => {
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
-      <EmergencyBanner onOpenWall={() => setActiveTab("guard")} canClear={can("emergency:trigger")} />
+      <div className="flex min-h-screen flex-col lg:pl-[264px]">
+        <EmergencyBanner onOpenWall={() => setActiveTab("guard")} canClear={can("emergency:trigger")} />
 
-      <main className={`flex-1 max-w-[1500px] w-full mx-auto px-3 sm:px-6 py-4 sm:py-7 ${navSpace}`}>
-        {activeTab === "dashboard" && <DashboardPage onGlobalStatsUpdate={setGlobalStats} />}
-        {activeTab === "guard" && <GuardPage onGlobalStatsUpdate={setGlobalStats} />}
-        {activeTab === "analytics" && <AnalyticsPage />}
-        {activeTab === "lab" && <LabPage />}
-        {activeTab === "training" && <TrainingPage />}
-        {activeTab === "ops" && <OpsPage />}
-        {activeTab === "users" && <UsersPage />}
-        {activeTab === "audit" && <AuditPage />}
-      </main>
+        <main
+          id="main"
+          className={`mx-auto w-full max-w-[1600px] flex-1 px-3 py-4 sm:px-6 sm:py-6 lg:px-8 ${navSpace}`}
+        >
+          <div key={activeTab} className="fade-up">
+            {activeTab === "dashboard" && <DashboardPage onGlobalStatsUpdate={setGlobalStats} />}
+            {activeTab === "guard" && <GuardPage onGlobalStatsUpdate={setGlobalStats} />}
+            {activeTab === "analytics" && <AnalyticsPage />}
+            {activeTab === "lab" && <LabPage />}
+            {activeTab === "training" && <TrainingPage />}
+            {activeTab === "ops" && <OpsPage />}
+            {activeTab === "users" && <UsersPage />}
+            {activeTab === "audit" && <AuditPage />}
+          </div>
+        </main>
 
-      <footer className={`border-t border-slate-800/80 bg-slate-950/80 ${navSpace}`}>
-        <div className="max-w-[1500px] mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-            <span>
-              {systemStatus?.project ?? "Аналитика безопасности школы"} · Лицей №6 «Перспектива» · v
-              {systemStatus?.version ?? "2.0.0"}
-            </span>
+        <footer className={`border-t border-slate-800/70 bg-slate-950/50 ${navSpace}`}>
+          <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-4 py-4 text-[10.5px] text-slate-500 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-8">
+            <div className="flex items-center gap-2">
+              <span className="flex h-6 w-6 items-center justify-center rounded-lg border border-brand-500/20 bg-brand-500/10">
+                <ShieldCheck className="h-3.5 w-3.5 text-brand-400" />
+              </span>
+              <span>
+                {systemStatus?.project ?? "Аналитика безопасности школы"} · Лицей №6 «Перспектива» · v
+                {systemStatus?.version ?? "2.1"}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+              {systemStatus && (
+                <>
+                  <span className="inline-flex items-center gap-1.5">
+                    <Activity className="h-3 w-3 text-slate-600" />
+                    Сессия: <span className="text-slate-400">{systemStatus.auth.scheme}</span>
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <Cpu className="h-3 w-3 text-slate-600" />
+                    Трекинг: <span className="text-slate-400">{systemStatus.tracking.backend}</span> · выдержка{" "}
+                    {systemStatus.tracking.dwell_threshold_sec.toFixed(0)} с
+                  </span>
+                  <span className="hidden sm:inline">
+                    Gate:{" "}
+                    <span className="text-slate-400">
+                      mAP@50 ≥ baseline − {(systemStatus.validation_gate.map50_tolerance * 100).toFixed(0)} п.п.
+                    </span>
+                  </span>
+                </>
+              )}
+              <span className="rounded-full border border-slate-800 bg-slate-900/70 px-2 py-0.5 font-mono text-slate-400">
+                {user?.username}
+              </span>
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-            {systemStatus && (
-              <>
-                <span>
-                  Сессия: <span className="text-slate-400">{systemStatus.auth.scheme}</span>
-                </span>
-                <span>
-                  Трекинг: <span className="text-slate-400">{systemStatus.tracking.backend}</span> · выдержка{" "}
-                  {systemStatus.tracking.dwell_threshold_sec.toFixed(0)} с
-                </span>
-                <span>
-                  Gate: <span className="text-slate-400">mAP@50 ≥ baseline − {(systemStatus.validation_gate.map50_tolerance * 100).toFixed(0)} п.п.</span>
-                </span>
-              </>
-            )}
-            <span className="font-mono">{user?.username}</span>
-          </div>
-        </div>
-      </footer>
+        </footer>
+      </div>
 
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <EventToasts />
@@ -131,9 +178,9 @@ const Gate: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center gap-4 text-slate-400">
-        <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center">
-          <Loader2 className="w-6 h-6 text-emerald-400 animate-spin" />
+      <div className="app-backdrop flex min-h-screen flex-col items-center justify-center gap-4 text-slate-400">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-500/25 bg-brand-500/10">
+          <Loader2 className="h-6 w-6 animate-spin text-brand-400" />
         </div>
         <p className="text-sm">Проверка сессии…</p>
       </div>
