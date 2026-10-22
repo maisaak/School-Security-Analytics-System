@@ -101,7 +101,7 @@ School-Security-Analytics-System/
 │   │   │   ├── tasks.py         # Celery-задачи дообучения + gate
 │   │   │   └── simulator.py     # реалистичные CCTV-сцены для демо
 │   │   └── db/                  # SQLAlchemy: users, cameras, violations, model_versions, audit_log
-│   └── tests/                   # 45 pytest-тестов: auth, RBAC, security, tracking, registry, API
+│   └── tests/                   # 71 pytest-тест: auth, RBAC, security, tracking, registry, upload, settings, API
 ├── frontend/                    # React 18 + TypeScript + TailwindCSS
 │   └── src/
 │       ├── auth/AuthContext.tsx # сессия, права, реакция на 401
@@ -147,7 +147,7 @@ docker compose up -d --build
 ### Тесты и сборка
 
 ```bash
-cd backend && python -m pytest tests -q     # 59 тестов
+cd backend && python -m pytest tests -q     # 71 тест
 cd frontend && npm run build                # tsc + vite build
 ```
 
