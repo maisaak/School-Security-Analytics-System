@@ -14,7 +14,6 @@ import {
   Settings2,
   Shield,
   ShieldAlert,
-  ShieldCheck,
   Upload,
   Users,
   Video,
@@ -30,7 +29,6 @@ export type AppTab =
   | "lab"
   | "training"
   | "ops"
-  | "security"
   | "users"
   | "audit";
 
@@ -49,7 +47,6 @@ const TABS: TabMeta[] = [
   { id: "lab", label: "Проверка медиа", shortLabel: "Медиа", icon: Upload },
   { id: "training", label: "Модели YOLO", shortLabel: "YOLO", icon: BrainCircuit },
   { id: "ops", label: "Эксплуатация", shortLabel: "Эксплуатация", icon: DatabaseZap },
-  { id: "security", label: "Безопасность и 2FA", shortLabel: "Защита", icon: ShieldCheck },
   { id: "users", label: "Пользователи", shortLabel: "Люди", icon: Users },
   { id: "audit", label: "Журнал аудита", shortLabel: "Аудит", icon: ScrollText },
 ];

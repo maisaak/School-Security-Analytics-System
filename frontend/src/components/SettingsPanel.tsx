@@ -86,7 +86,7 @@ const Toggle: React.FC<{
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose }) => {
   const { prefs, update, reset, saving, error } = usePrefs();
-  const { user, can } = useAuth();
+  const { user } = useAuth();
   const [twoFa, setTwoFa] = useState<{ enabled: boolean; recovery_codes_left: number } | null>(null);
   const [setupData, setSetupData] = useState<{ secret: string; otpauth_uri: string; recovery_codes: string[] } | null>(null);
   const [totpCode, setTotpCode] = useState("");
@@ -487,12 +487,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose }) =
               {twoFaError && <p className="text-[10px] text-red-300">{twoFaError}</p>}
             </div>
 
-            {can("security:manage") && (
-              <p className="text-[10px] text-slate-500 leading-relaxed">
-                Политика паролей и блокировка после неудачных попыток применяются автоматически.
-                Сброс 2FA и разблокировка других учётных записей — в разделе «Безопасность и 2FA».
-              </p>
-            )}
+            <p className="text-[10px] text-slate-500 leading-relaxed">
+              Политика паролей и блокировка после неудачных попыток применяются автоматически.
+              Сброс 2FA другого пользователя и снятие блокировки выполняет администратор через API.
+            </p>
           </section>
 
           {error && (

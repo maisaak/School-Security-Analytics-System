@@ -12,7 +12,6 @@ import { GuardPage } from "./pages/GuardPage";
 import { LabPage } from "./pages/LabPage";
 import { LoginPage } from "./pages/LoginPage";
 import { OpsPage } from "./pages/OpsPage";
-import { SecurityPage } from "./pages/SecurityPage";
 import { TrainingPage } from "./pages/TrainingPage";
 import { UsersPage } from "./pages/UsersPage";
 import { PrefsProvider, usePrefs } from "./prefs/PrefsContext";
@@ -24,7 +23,6 @@ const TAB_PERMISSION: Record<AppTab, string> = {
   lab: "media:check",
   training: "models:train",
   ops: "ops:manage",
-  security: "security:manage",
   users: "users:manage",
   audit: "audit:view",
 };
@@ -80,7 +78,6 @@ const AppShellInner: React.FC = () => {
         {activeTab === "lab" && <LabPage />}
         {activeTab === "training" && <TrainingPage />}
         {activeTab === "ops" && <OpsPage />}
-        {activeTab === "security" && <SecurityPage />}
         {activeTab === "users" && <UsersPage />}
         {activeTab === "audit" && <AuditPage />}
       </main>

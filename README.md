@@ -21,8 +21,7 @@
 | **Охранник КПП** (`guard`) | `guard` / `guard123` | Видеостена КПП, лента тревог, подтверждение отработки, проверка медиафайлов |
 
 > **2FA** (TOTP) настраивается самостоятельно в «Настройках» → «Безопасность учётной записи».
-> Администратор может сбросить 2FA, снять блокировку после неудачных входов и ограничить
-> пользователю список доступных камер в разделе «Безопасность и доступ».
+> Сброс 2FA, снятие блокировки и ограничение доступа к камерам выполняются администратором через API.
 
 На странице логина есть карточки **быстрого входа по роли** (endpoint `POST /api/auth/demo-login`, отключается через `DEMO_LOGIN_ENABLED=false`).
 
@@ -124,7 +123,7 @@ School-Security-Analytics-System/
 │   │   │   ├── tasks.py         # Celery-задачи дообучения + gate
 │   │   │   └── simulator.py     # реалистичные CCTV-сцены для демо
 │   │   └── db/                  # SQLAlchemy: users, cameras, violations, model_versions, audit_log
-│   └── tests/                   # 71 pytest-тест: auth, RBAC, security, tracking, registry, upload, settings, API
+│   └── tests/                   # 93 pytest-теста: auth, RBAC, security, tracking, registry, upload, settings, v3, API
 ├── frontend/                    # React 18 + TypeScript + TailwindCSS
 │   └── src/
 │       ├── auth/AuthContext.tsx # сессия, права, реакция на 401
@@ -360,10 +359,6 @@ RTSP → OpenCV → YOLOv8 + аннотация → ffmpeg (libx264) → HLS (in
 | `GET` | `/api/ops/watchdog` | admin | Состояние потоков и последние действия |
 | `GET` | `/metrics` | публично (без деталей) | Prometheus-метрики |
 | `GET/POST` | `/api/ops/emergency` | смотреть `emergency:trigger` | Режим эвакуации |
-| `GET` | `/api/security/overview` | admin | 2FA, блокировки, политика паролей, выгрузки |
-| `PUT` | `/api/security/users/{id}/camera-scope` | admin | Ограничение доступа к камерам |
-| `POST` | `/api/security/users/{id}/2fa/reset` | admin | Сброс 2FA |
-| `POST` | `/api/security/users/{id}/unlock` | admin | Снять блокировку |
 | `GET/POST` | `/api/auth/2fa/{status,setup,enable,disable}` | все авторизованные | Самостоятельная настройка TOTP |
 | `POST` | `/api/auth/password` | все авторизованные | Смена пароля с проверкой политики |
 
