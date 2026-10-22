@@ -306,7 +306,7 @@ class ViolationDetector:
             vtype = viol["type"]
             meta = THREAT_META.get(vtype, THREAT_META["suspicious_bag"])
             x1, y1, _, _ = viol["bbox"]
-            txt = f"⚠ {meta['ru']} · {viol['confidence']:.0%}"
+            txt = f"▲ {meta['ru']} · {viol['confidence']:.0%}"
             tb = draw.textbbox((0, 0), txt, font=FONT_BADGE)
             tw, th = tb[2] - tb[0], tb[3] - tb[1]
             by = max(4, y1 - th - 12)

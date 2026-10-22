@@ -13,12 +13,12 @@ CLASS_MAP = {
 }
 
 
-def extract_foreground_rgba(img_bgr: np.ndarray, white_thresh: int = 242) -> np.ndarray:
+def extract_foreground_rgba(img_bgr: np.ndarray, white_thresh: int = 226) -> np.ndarray:
     """Выделяет объект с белого студийного фона в RGBA с мягкой антиалиас-границей и обрезкой пустых полей."""
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    # Маска переднего плана: всё, что заметно темнее чистого белого фона или имеет цветовую насыщенность
+    # Маска переднего плана: исключаем студийную полутень на белом полу (яркая И ненасыщенная область)
     hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
-    mask = ((gray < white_thresh) | (hsv[:, :, 1] > 22)).astype(np.uint8) * 255
+    mask = ((gray < white_thresh) | ((gray < 245) & (hsv[:, :, 1] > 32))).astype(np.uint8) * 255
 
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
