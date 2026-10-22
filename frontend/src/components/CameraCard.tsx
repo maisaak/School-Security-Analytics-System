@@ -1,6 +1,7 @@
 import React from "react";
-import { Hourglass, KeyRound, Maximize2, Pause, Play, Sparkles, Trash2 } from "lucide-react";
-import { api, Camera } from "../api/client";
+import { BrainCircuit, Hourglass, KeyRound, Maximize2, Pause, Play, Sparkles, Trash2 } from "lucide-react";
+import { Camera, DetectorProfile } from "../api/client";
+import { CameraStream } from "./CameraStream";
 
 interface CameraCardProps {
   camera: Camera;
@@ -14,6 +15,8 @@ interface CameraCardProps {
     scenario: "suspicious_bag" | "dog" | "weapon" | "person_with_bag"
   ) => void;
   onExpand: (camera: Camera) => void;
+  detectorProfiles?: DetectorProfile[];
+  onDetectorChange?: (id: number, profile: string) => void;
 }
 
 export const CameraCard: React.FC<CameraCardProps> = ({
@@ -25,6 +28,8 @@ export const CameraCard: React.FC<CameraCardProps> = ({
   onDelete,
   onSimulate,
   onExpand,
+  detectorProfiles = [],
+  onDetectorChange,
 }) => {
   const hasThreat = camera.active_threats.length > 0;
   const holding = camera.bag_tracking?.filter((t) => t.state === "holding") ?? [];
@@ -40,18 +45,7 @@ export const CameraCard: React.FC<CameraCardProps> = ({
       }`}
     >
       <div className="aspect-video bg-slate-950 relative group">
-        {camera.is_active ? (
-          <img
-            src={api.streamUrl(camera.id)}
-            alt={camera.name}
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 gap-2">
-            <Pause className="w-8 h-8 opacity-60" />
-            <span className="text-xs font-medium">Поток приостановлен оператором</span>
-          </div>
-        )}
+        <CameraStream camera={camera} />
 
         <div className="absolute top-3 left-3 flex flex-wrap items-center gap-2 max-w-[80%]">
           <span
@@ -122,6 +116,28 @@ export const CameraCard: React.FC<CameraCardProps> = ({
               {camera.has_credentials && <KeyRound className="w-3 h-3 text-amber-500/80 shrink-0" />}
               {camera.rtsp_url}
             </p>
+            <div className="flex items-center gap-1.5 mt-1.5">
+              <span
+                className={`text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border ${
+                  camera.source_kind === "rtsp"
+                    ? "text-sky-300 border-sky-500/30 bg-sky-500/10"
+                    : camera.source_kind === "simulated"
+                    ? "text-indigo-300 border-indigo-500/30 bg-indigo-500/10"
+                    : "text-slate-300 border-slate-600/40 bg-slate-700/20"
+                }`}
+              >
+                {camera.source_kind === "rtsp" ? "RTSP" : camera.source_kind === "simulated" ? "SIM" : camera.source_kind.toUpperCase()}
+              </span>
+              <span
+                className={`text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border ${
+                  camera.stream_mode === "hls"
+                    ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                    : "text-slate-400 border-slate-600/40 bg-slate-700/20"
+                }`}
+              >
+                {camera.stream_mode === "hls" ? "HLS" : "MJPEG"}
+              </span>
+            </div>
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
@@ -148,6 +164,29 @@ export const CameraCard: React.FC<CameraCardProps> = ({
             )}
           </div>
         </div>
+
+        {canManage && detectorProfiles.length > 0 && (
+          <div className="pt-2.5 border-t border-slate-800/80">
+            <label className="flex items-center gap-1.5 text-[10px] text-slate-400 mb-1.5">
+              <BrainCircuit className="w-3.5 h-3.5 text-emerald-400" />
+              Модели YOLO на этой камере
+            </label>
+            <select
+              value={camera.detector_profile}
+              onChange={(e) => onDetectorChange?.(camera.id, e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-emerald-500/60"
+            >
+              {detectorProfiles.map((profile) => (
+                <option key={profile.key} value={profile.key}>
+                  {profile.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-[10px] text-slate-500 mt-1 leading-snug">
+              {detectorProfiles.find((p) => p.key === camera.detector_profile)?.description}
+            </p>
+          </div>
+        )}
 
         {camera.is_simulated && camera.is_active && canSimulate && (
           <div className="pt-2.5 border-t border-slate-800/80">

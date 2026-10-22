@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Plus, RefreshCw, X } from "lucide-react";
-import { api, Camera, DashboardStats, Violation } from "../api/client";
+import { api, Camera, DashboardStats, DetectorProfile, Violation } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { StatsOverview } from "../components/StatsOverview";
 import { CameraCard } from "../components/CameraCard";
 import { AddCameraModal } from "../components/AddCameraModal";
+import { CameraStream } from "../components/CameraStream";
 import { VIOLATION_META, ViolationsTable } from "../components/ViolationsTable";
 import { VideoModal } from "../components/VideoModal";
 import { ErrorNotice } from "../components/ui";
@@ -26,11 +27,24 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [expandedCamera, setExpandedCamera] = useState<Camera | null>(null);
+  const [detectorProfiles, setDetectorProfiles] = useState<DetectorProfile[]>([]);
   const [activeVideo, setActiveVideo] = useState<Violation | null>(null);
   const [latestAlert, setLatestAlert] = useState<Violation | null>(null);
   const highestSeenId = useRef<number | null>(null);
 
   const canSimulate = can("cameras:simulate");
+  const canManageCameras = can("cameras:manage");
+
+  useEffect(() => {
+    if (!canManageCameras) {
+      setDetectorProfiles([]);
+      return;
+    }
+    api
+      .getDetectorProfiles()
+      .then((res) => setDetectorProfiles(res.profiles))
+      .catch(() => setDetectorProfiles([]));
+  }, [canManageCameras]);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -131,7 +145,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
           <div>
             <h2 className="text-base sm:text-lg font-semibold text-white">Видеостена реального времени</h2>
             <p className="text-[11px] text-slate-400">
-              MJPEG-потоки с авторизацией по HttpOnly cookie · трекинг бесхозных предметов с таймером выдержки
+              RTSP → HLS (H.264) с детекцией поверх кадра · MJPEG-фолбэк · трекинг бесхозных предметов с таймером выдержки
             </p>
           </div>
 
@@ -160,8 +174,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
             <CameraCard
               key={cam.id}
               camera={cam}
-              canManage={can("cameras:manage")}
+              canManage={canManageCameras}
               canSimulate={canSimulate}
+              detectorProfiles={detectorProfiles}
+              onDetectorChange={async (id, profile) => {
+                await api.setCameraDetector(id, profile);
+                fetchAll();
+              }}
               dwellThreshold={stats?.tracking.dwell_threshold_sec ?? 6}
               onToggle={async (id) => {
                 await api.toggleCamera(id);
@@ -232,11 +251,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <img
-              src={api.streamUrl(expandedCamera.id)}
-              alt={expandedCamera.name}
-              className="w-full rounded-xl bg-black aspect-video object-contain"
-            />
+            <div className="w-full rounded-xl bg-black aspect-video overflow-hidden">
+              <CameraStream
+                camera={expandedCamera}
+                showSwitch={false}
+                className="w-full h-full object-contain"
+              />
+            </div>
           </div>
         </div>
       )}

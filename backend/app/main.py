@@ -113,7 +113,13 @@ def _seed_initial_state() -> None:
             ensure_baseline_version(db, metrics=DEMO_BASELINE_METRICS)
 
         for cam in db.query(Camera).all():
-            stream_manager.start_camera(cam.id, cam.name, cam.rtsp_url, is_active=cam.is_active)
+            stream_manager.start_camera(
+                cam.id,
+                cam.name,
+                cam.rtsp_url,
+                is_active=cam.is_active,
+                detector_profile=cam.detector_profile,
+            )
     finally:
         db.close()
 

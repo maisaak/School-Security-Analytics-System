@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { api, Camera, DashboardStats, Violation } from "../api/client";
+import { CameraStream } from "../components/CameraStream";
 import { VIOLATION_META } from "../components/ViolationsTable";
 import { VideoModal } from "../components/VideoModal";
 import { EmptyState, ErrorNotice, formatDateTime, Pill, SectionCard } from "../components/ui";
@@ -136,17 +137,7 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
                   }`}
                 >
                   <div className="aspect-video">
-                    {cam.is_active ? (
-                      <img
-                        src={api.streamUrl(cam.id)}
-                        alt={cam.name}
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-[11px] text-slate-500">
-                        Поток на паузе
-                      </div>
-                    )}
+                    <CameraStream camera={cam} showSwitch={false} />
                   </div>
 
                   <div className="absolute top-2 left-2 flex flex-wrap gap-1.5 max-w-[85%]">
@@ -346,11 +337,12 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <img
-              src={api.streamUrl(expandedCamera.id)}
-              alt={expandedCamera.name}
-              className="w-full rounded-xl bg-black aspect-video object-contain"
-            />
+            <div className="w-full rounded-xl bg-black aspect-video overflow-hidden">
+              <CameraStream
+                camera={expandedCamera}
+                className="w-full h-full object-contain"
+              />
+            </div>
           </div>
         </div>
       )}

@@ -7,16 +7,20 @@ import {
   Database,
   GitBranch,
   History,
+  Layers,
   Loader2,
   Play,
   RotateCcw,
   ShieldCheck,
+  Cpu,
   Upload,
   X,
 } from "lucide-react";
 import {
   api,
   DatasetInfo,
+  DetectorProfile,
+  ModelCatalog,
   ModelVersion,
   RetrainJob,
   ValidationGateInfo,
@@ -42,6 +46,7 @@ export const TrainingPage: React.FC = () => {
   const [jobs, setJobs] = useState<RetrainJob[]>([]);
   const [versions, setVersions] = useState<ModelVersion[]>([]);
   const [gate, setGate] = useState<ValidationGateInfo | null>(null);
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [epochs, setEpochs] = useState(6);
   const [sampleClass, setSampleClass] = useState<ViolationType>("suspicious_bag");
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
@@ -58,16 +63,18 @@ export const TrainingPage: React.FC = () => {
 
   const loadState = useCallback(async () => {
     try {
-      const [ds, jb, vs, gt] = await Promise.all([
+      const [ds, jb, vs, gt, cat] = await Promise.all([
         api.getDatasetInfo(),
         api.getRetrainJobs(),
         api.getModelVersions(),
         api.getValidationGate(),
+        api.getModelCatalog().catch(() => null),
       ]);
       setDataset(ds);
       setJobs(jb);
       setVersions(vs);
       setGate(gt);
+      setCatalog(cat);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось загрузить состояние обучения");

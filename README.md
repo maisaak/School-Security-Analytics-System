@@ -135,7 +135,7 @@ docker compose up -d --build
 ### Тесты и сборка
 
 ```bash
-cd backend && python -m pytest tests -q     # 48 тестов
+cd backend && python -m pytest tests -q     # 59 тестов
 cd frontend && npm run build                # tsc + vite build
 ```
 
@@ -178,6 +178,62 @@ HttpOnly cookie `school_session` — основной транспорт сес�
 `/api/violations/{id}/video` и `/media/*`). Cookie остаётся основным способом
 для обычного браузера, Bearer-режим включается автоматически, когда cookie недоступны.
 
+## 🎛️ Выбор YOLO-моделей и HLS вместо MJPEG
+
+### Каталог моделей и профили детекции
+
+Ансамбль состоит из трёх независимых моделей, и админ решает, какие из них
+работают на каждой камере:
+
+| Компонент | Веса | Что детектирует |
+|-----------|------|-----------------|
+| `coco` | `yolov8n.pt` | person, backpack/handbag/suitcase, dog, knife |
+| `weapon` | `weapon_yolov8.pt` | guns, knife |
+| `custom` | `school_security_best.pt` (боевая версия из реестра) | dog, weapon, suspicious_bag |
+
+Готовые профили (`GET /api/detector/profiles`):
+
+| Профиль | Модели | Когда нужен |
+|---------|--------|-------------|
+| `ensemble` | COCO + оружие + школа | максимальная полнота (по умолчанию) |
+| `custom` | только школа | минимум CPU, школьные классы |
+| `custom_weapon` | школа + оружие | КПП и рамки металлодетектора |
+| `coco` | только COCO | люди и обстановка без дообучения |
+| `weapon` | только оружие | дежурный режим на входе |
+
+Профиль хранится в `cameras.detector_profile`, меняется админом прямо на карточке
+камеры в разделе «Мониторинг» (`PATCH /api/cameras/{id}/detector`) и применяется
+на лету — воркер переключает набор моделей без перезапуска потока. Каждое
+переключение пишется в аудит как `camera.detector.update`.
+
+`GET /api/models/catalog` отдаёт админу полную картину: файлы весов, их классы,
+порог уверенности, размер, статус загрузки, профили с числом камер на каждом
+и реестр версий с mAP@50 (боевую версию выбирают откатом/активацией из реестра).
+
+### Почему RTSP играется через HLS, а не MJPEG
+
+Браузер не умеет воспроизводить `rtsp://` напрямую. Раньше камера отдавалась
+как MJPEG — поток JPEG-кадров, который перерисовывается в `<img>`: нет звука,
+нет перемотки и буфера, высокий трафик. Теперь воркер камеры отдаёт уже
+аннотированные кадры (рамки YOLO + HUD) в `ffmpeg`, тот кодирует H.264 (main
+profile, yuv420p) и режет на mpeg-ts сегменты по 1 секунде:
+
+```
+RTSP → OpenCV → YOLOv8 + аннотация → ffmpeg (libx264) → HLS (index.m3u8 + seg*.ts) → hls.js в браузере
+```
+
+- Плеер — обычный `<video>` через `hls.js` (Safari играет нативно), задержка ~2–3 с;
+- сегменты и плейлист закрыты той же авторизацией, что и остальные эндпоинты
+  (`Authorization`, cookie или `?token=` для `<img>`);
+- если `ffmpeg` недоступен, браузер не умеет MSE или поток ещё не прогрелся,
+  компонент `CameraStream` автоматически откатывается на MJPEG и показывает
+  об этом плашку — камеры остаются рабочими в любом окружении;
+- на карточке видно источник (`RTSP`/`SIM`) и текущий режим (`HLS`/`MJPEG`),
+  а переключатель в углу кадра позволяет сравнить оба режима.
+
+Настройки: `HLS_ENABLED`, `HLS_SEGMENT_SEC`, `HLS_MAX_SEGMENTS`, `HLS_VIDEO_CODEC`
+и `DETECTOR_PROFILE` (профиль по умолчанию) — см. `.env.example`.
+
 ### Камеры и инциденты
 
 | Метод | Эндпоинт | Роль | Описание |
@@ -186,7 +242,11 @@ HttpOnly cookie `school_session` — основной транспорт сес�
 | `POST` | `/api/cameras` | admin | Добавить камеру |
 | `POST` | `/api/cameras/{id}/toggle` | admin | Пауза / возобновление |
 | `DELETE` | `/api/cameras/{id}` | admin | Удалить камеру и её улики |
-| `GET` | `/api/cameras/{id}/stream` | все | MJPEG (cookie-авторизация) |
+| `GET` | `/api/cameras/{id}/stream` | все | MJPEG-фолбэк (cookie-авторизация) |
+| `GET` | `/api/cameras/{id}/hls/index.m3u8` | все | HLS-плейлист камеры (H.264) |
+| `GET` | `/api/cameras/{id}/hls/{segment}` | все | mpeg-ts сегмент (только `segNNNNN.ts`) |
+| `PATCH` | `/api/cameras/{id}/detector` | admin | Выбор профиля YOLO для камеры |
+| `GET` | `/api/detector/profiles` | все | Справочник профилей детекции |
 | `POST` | `/api/cameras/{id}/simulate` | admin | Тестовый сценарий |
 | `GET` | `/api/violations` | все | Журнал нарушений (track_id, dwell_seconds) |
 | `PATCH` | `/api/violations/{id}/ack` | admin, director, guard | Подтвердить отработку |
@@ -205,6 +265,7 @@ HttpOnly cookie `school_session` — основной транспорт сес�
 | `GET` | `/api/models/versions` | admin, director | Реестр версий весов |
 | `GET` | `/api/models/gate` | admin, director | Параметры gate и отклонённые версии |
 | `POST` | `/api/models/versions/{id}/rollback` | admin | Откат на версию (`force` для rejected) |
+| `GET` | `/api/models/catalog` | admin, director | Каталог YOLO-моделей, профили, HLS-статус |
 
 ### Администрирование
 

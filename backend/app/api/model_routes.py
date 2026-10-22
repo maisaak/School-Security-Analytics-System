@@ -9,21 +9,69 @@ import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.api.schemas import ModelVersionOut, RetrainJobOut, RetrainRequest, RollbackRequest
+from app.api.schemas import (
+    ModelCatalogOut,
+    ModelVersionOut,
+    RetrainJobOut,
+    RetrainRequest,
+    RollbackRequest,
+)
 from app.api.serializers import serialize_job, serialize_version
 from app.core.auth import require_permissions
 from app.core.config import PROJECT_ROOT, settings
 from app.core.permissions import Permission
 from app.core.security import read_upload_limited, validate_dataset_yaml
-from app.db.models import ModelVersion, RetrainJob, User
+from app.db.models import Camera, ModelVersion, RetrainJob, User
 from app.db.session import get_db
 from app.models.detector import detector
 from app.services.audit import record_audit
+from app.services.hls import playlist_ready
 from app.services.model_registry import activate_version, current_production
 from app.services.tasks import celery_app, execute_retrain_job, retrain_model_task
 
 router = APIRouter(prefix="/api/models", tags=["YOLOv8: дообучение и реестр версий"])
 RETRAIN_LOCK = threading.Lock()
+
+
+@router.get("/catalog", response_model=ModelCatalogOut)
+def model_catalog(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permissions(Permission.MODELS_VIEW)),
+):
+    """
+    Каталог YOLO-моделей для админ-панели.
+
+    Отдаёт три слоя:
+      1. components — реальные веса ансамбля (COCO, оружие, школьная модель):
+         файл, классы, порог уверенности, размер, статус загрузки;
+      2. profiles — готовые профили детекции и сколько камер на каждом;
+      3. versions — реестр версий весов с mAP@50, чтобы выбрать боевую модель.
+    """
+    camera_counts: dict[str, int] = {}
+    for cam in db.query(Camera).all():
+        key = cam.detector_profile or settings.DETECTOR_PROFILE
+        camera_counts[key] = camera_counts.get(key, 0) + 1
+
+    catalog = detector.describe_catalog(camera_counts)
+    production = current_production(db)
+    versions = db.query(ModelVersion).order_by(ModelVersion.id.desc()).limit(30).all()
+
+    return ModelCatalogOut(
+        components=catalog["components"],
+        profiles=catalog["profiles"],
+        versions=[serialize_version(v, production.id if production else None) for v in versions],
+        production=serialize_version(production, production.id) if production else None,
+        active_weights=catalog["active_weights"],
+        reloaded_at=catalog["reloaded_at"],
+        hls={
+            "enabled": settings.HLS_ENABLED,
+            "segment_sec": settings.HLS_SEGMENT_SEC,
+            "max_segments": settings.HLS_MAX_SEGMENTS,
+            "ready_cameras": [
+                cam.id for cam in db.query(Camera).all() if playlist_ready(cam.id)
+            ],
+        },
+    )
 
 
 @router.get("/dataset")

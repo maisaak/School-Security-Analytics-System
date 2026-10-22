@@ -14,6 +14,13 @@ from ultralytics import YOLO
 torch.set_num_threads(2)
 
 from app.core.config import PROJECT_ROOT, settings
+from app.core.detector_profiles import (
+    COMPONENT_LABELS,
+    COMPONENT_ORDER,
+    normalize_profile,
+    profile_catalog,
+    profile_components,
+)
 
 
 def _load_unicode_font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -122,6 +129,63 @@ class ViolationDetector:
         if mtime > self._custom_mtime:
             self.reload_custom_weights(custom_path)
 
+    # ── Каталог моделей для админ-панели ─────────────────────────────────────
+    def _component_entry(self, role: str, model, path: Path, conf: float, imgsz: int) -> dict:
+        exists = path.is_file()
+        classes: list[str] = []
+        if model is not None:
+            try:
+                classes = sorted({str(v) for v in dict(model.names).values()})
+            except Exception:
+                classes = []
+        return {
+            "role": role,
+            "label": COMPONENT_LABELS.get(role, role),
+            "filename": path.name,
+            "exists": exists,
+            "loaded": model is not None,
+            "size_bytes": path.stat().st_size if exists else 0,
+            "classes": classes,
+            "confidence_threshold": conf,
+            "imgsz": imgsz,
+            "architecture": "YOLOv8",
+        }
+
+    def describe_components(self) -> list[dict]:
+        """Состав ансамбля: какие веса реально загружены и что они умеют детектировать."""
+        with self._lock:
+            return [
+                self._component_entry(
+                    "coco",
+                    self.coco_model,
+                    Path(settings.YOLO_COCO_MODEL_PATH),
+                    settings.CONFIDENCE_THRESHOLD,
+                    480,
+                ),
+                self._component_entry(
+                    "weapon",
+                    self.weapon_model,
+                    Path(settings.YOLO_WEAPON_MODEL_PATH),
+                    settings.WEAPON_CONFIDENCE_THRESHOLD,
+                    480,
+                ),
+                self._component_entry(
+                    "custom",
+                    self.custom_model,
+                    Path(settings.YOLO_CUSTOM_MODEL_PATH),
+                    settings.CUSTOM_CONFIDENCE_THRESHOLD,
+                    416,
+                ),
+            ]
+
+    def describe_catalog(self, camera_counts: dict[str, int] | None = None) -> dict:
+        return {
+            "components": self.describe_components(),
+            "profiles": profile_catalog(camera_counts),
+            "active_weights": self.active_weights_name,
+            "reloaded_at": self.reloaded_at,
+        }
+
     def reload_custom_weights(self, weights_path: str | Path | None = None) -> None:
         target = Path(weights_path) if weights_path else Path(settings.YOLO_CUSTOM_MODEL_PATH)
         if not target.is_absolute():
@@ -136,8 +200,20 @@ class ViolationDetector:
             self.active_weights_name = target.name
             self.reloaded_at = datetime.now().isoformat(timespec="seconds")
 
-    def detect_frame(self, frame: np.ndarray) -> dict:
+    def detect_frame(self, frame: np.ndarray, profile: str = "ensemble") -> dict:
+        """
+        Прогон кадра через выбранный профиль детекции.
+
+        profile: ключ из DETECTOR_PROFILES (ensemble | custom | custom_weapon | coco | weapon).
+        Набор реально запускаемых моделей определяется профилем — админ может
+        снизить нагрузку на CPU, оставив только нужные детекторы.
+        """
         self._maybe_reload_from_disk()
+        components = profile_components(profile)
+        use_coco = "coco" in components
+        use_weapon = "weapon" in components and self.weapon_model is not None
+        use_custom = "custom" in components and self.custom_model is not None
+
         t0 = time.perf_counter()
         h, w = frame.shape[:2]
         diag = math.hypot(w, h)
@@ -148,12 +224,16 @@ class ViolationDetector:
         weapon_candidates: list[tuple[float, list[int]]] = []
 
         with self._lock:
-            coco_res = self.coco_model.predict(
-                frame,
-                imgsz=480,
-                conf=settings.CONFIDENCE_THRESHOLD,
-                verbose=False,
-            )[0]
+            coco_res = (
+                self.coco_model.predict(
+                    frame,
+                    imgsz=480,
+                    conf=settings.CONFIDENCE_THRESHOLD,
+                    verbose=False,
+                )[0]
+                if use_coco
+                else None
+            )
             weapon_res = (
                 self.weapon_model.predict(
                     frame,
@@ -161,7 +241,7 @@ class ViolationDetector:
                     conf=settings.WEAPON_CONFIDENCE_THRESHOLD,
                     verbose=False,
                 )[0]
-                if self.weapon_model is not None
+                if use_weapon
                 else None
             )
             custom_res = (
@@ -171,11 +251,11 @@ class ViolationDetector:
                     conf=settings.CUSTOM_CONFIDENCE_THRESHOLD,
                     verbose=False,
                 )[0]
-                if self.custom_model is not None
+                if use_custom
                 else None
             )
 
-        for box in coco_res.boxes:
+        for box in (coco_res.boxes if coco_res is not None else []):
             cls_id = int(box.cls[0])
             label = str(coco_res.names.get(cls_id, "")).lower()
             conf = float(box.conf[0])
@@ -270,6 +350,8 @@ class ViolationDetector:
             # Сырые кандидаты для трекера ByteTrack / таймера выдержки бесхозной сумки
             "bags": [{"confidence": round(c, 4), "bbox": b} for c, b in bag_candidates],
             "persons": [{"confidence": round(c, 4), "bbox": b} for c, b in person_boxes],
+            "profile": normalize_profile(profile),
+            "components_used": [c for c in COMPONENT_ORDER if c in components],
         }
 
     def annotate_frame(

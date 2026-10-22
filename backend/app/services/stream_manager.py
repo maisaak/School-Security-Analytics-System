@@ -12,10 +12,12 @@ import cv2
 import numpy as np
 
 from app.core.config import settings
+from app.core.detector_profiles import normalize_profile
 from app.core.security import safe_delete_media_file
 from app.db.models import Violation
 from app.db.session import SessionLocal
 from app.models.detector import detector
+from app.services.hls import HlsPublisher
 from app.services.simulator import RealisticCCTVSimulator
 from app.services.tracking import BagDwellMonitor
 
@@ -91,11 +93,20 @@ class CameraWorker(threading.Thread):
     def target_fps(self) -> float:
         return float(settings.STREAM_TARGET_FPS or self.TARGET_FPS)
 
-    def __init__(self, camera_id: int, name: str, rtsp_url: str, phase_offset: float = 0.0) -> None:
+    def __init__(
+        self,
+        camera_id: int,
+        name: str,
+        rtsp_url: str,
+        phase_offset: float = 0.0,
+        detector_profile: str | None = None,
+    ) -> None:
         super().__init__(daemon=True)
         self.camera_id = camera_id
         self.name = name
         self.rtsp_url = rtsp_url
+        # Профиль детекции: какие модели YOLO прогоняются на кадрах этой камеры
+        self.detector_profile = normalize_profile(detector_profile or settings.DETECTOR_PROFILE)
 
         self.stop_event = threading.Event()
         self.paused = False
@@ -119,8 +130,22 @@ class CameraWorker(threading.Thread):
         self.stream_online: bool = False
         self.last_error: str | None = None
 
+        # HLS-публикатор: аннотированные кадры -> H.264/HLS для браузерного плеера
+        self.hls: HlsPublisher | None = (
+            HlsPublisher(camera_id=camera_id, fps=float(settings.STREAM_TARGET_FPS or self.TARGET_FPS))
+            if settings.HLS_ENABLED
+            else None
+        )
+
     def stop(self) -> None:
         self.stop_event.set()
+        if self.hls is not None:
+            self.hls.stop()
+            self.hls = None
+
+    def set_detector_profile(self, profile: str) -> None:
+        """Горячая смена моделей без перезапуска камеры."""
+        self.detector_profile = normalize_profile(profile)
 
     def trigger_scenario(self, scenario: str) -> bool:
         if self.simulator is None:
@@ -293,10 +318,13 @@ class CameraWorker(threading.Thread):
 
     def _process_single_frame(self, raw_frame: np.ndarray, frame_idx: int) -> None:
         if frame_idx % max(1, int(settings.DETECT_EVERY_N_FRAMES)) == 0:
-            self.last_analysis = self._apply_dwell_tracking(detector.detect_frame(raw_frame), raw_frame.shape)
+            analysis = detector.detect_frame(raw_frame, profile=self.detector_profile)
+            self.last_analysis = self._apply_dwell_tracking(analysis, raw_frame.shape)
 
         annotated = detector.annotate_frame(raw_frame, self.last_analysis, camera_title=self.name)
         self.frame_buffer.append(annotated)
+        if self.hls is not None:
+            self.hls.push(annotated)
 
         ok, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
         if ok:
@@ -342,16 +370,37 @@ class StreamManager:
         self._workers: dict[int, CameraWorker] = {}
         self._lock = threading.Lock()
 
-    def start_camera(self, camera_id: int, name: str, rtsp_url: str, is_active: bool = True) -> None:
+    def start_camera(
+        self,
+        camera_id: int,
+        name: str,
+        rtsp_url: str,
+        is_active: bool = True,
+        detector_profile: str | None = None,
+    ) -> None:
         with self._lock:
             existing = self._workers.pop(camera_id, None)
             if existing:
                 existing.stop()
             offset = (camera_id * 8.5) % 26.0
-            worker = CameraWorker(camera_id=camera_id, name=name, rtsp_url=rtsp_url, phase_offset=offset)
+            worker = CameraWorker(
+                camera_id=camera_id,
+                name=name,
+                rtsp_url=rtsp_url,
+                phase_offset=offset,
+                detector_profile=detector_profile,
+            )
             worker.paused = not is_active
             self._workers[camera_id] = worker
             worker.start()
+
+    def set_detector_profile(self, camera_id: int, profile: str) -> bool:
+        """Применяет новый профиль детекции к работающей камере на лету."""
+        worker = self._workers.get(camera_id)
+        if worker is None:
+            return False
+        worker.set_detector_profile(profile)
+        return True
 
     def set_paused(self, camera_id: int, paused: bool) -> None:
         worker = self._workers.get(camera_id)
@@ -395,6 +444,9 @@ class StreamManager:
                 "active_threats": [],
                 "bag_tracking": [],
                 "is_simulated": False,
+                "detector_profile": normalize_profile(settings.DETECTOR_PROFILE),
+                "stream_mode": "mjpeg",
+                "hls_ready": False,
             }
         return {
             "online": worker.stream_online and not worker.paused,
@@ -404,6 +456,9 @@ class StreamManager:
             "active_threats": [v["type"] for v in worker.last_analysis.get("violations", [])],
             "bag_tracking": worker.last_analysis.get("bag_tracks", []),
             "is_simulated": worker.simulator is not None,
+            "detector_profile": worker.detector_profile,
+            "stream_mode": "hls" if (worker.hls is not None and worker.hls.ready()) else "mjpeg",
+            "hls_ready": bool(worker.hls is not None and worker.hls.ready()),
         }
 
     def stop_all(self) -> None:

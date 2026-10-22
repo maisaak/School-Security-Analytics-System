@@ -79,6 +79,10 @@ class BagTrackOut(BaseModel):
     observed: bool
 
 
+class CameraDetectorUpdate(BaseModel):
+    profile: str = Field(..., examples=["ensemble", "custom", "coco", "weapon"])
+
+
 class CameraOut(BaseModel):
     id: int
     name: str
@@ -94,6 +98,11 @@ class CameraOut(BaseModel):
     active_threats: list[str] = []
     bag_tracking: list[BagTrackOut] = []
     is_simulated: bool = False
+    # Источник и способ воспроизведения
+    source_kind: str = "simulated"  # simulated | rtsp | http | file
+    detector_profile: str = "ensemble"
+    stream_mode: str = "mjpeg"  # hls | mjpeg
+    hls_ready: bool = False
 
 
 class SimulateRequest(BaseModel):
@@ -192,3 +201,35 @@ class AuditPageOut(BaseModel):
     total: int
     items: list[AuditLogOut]
     actions: list[str]
+
+
+class DetectorComponentOut(BaseModel):
+    role: str
+    label: str
+    filename: str
+    exists: bool
+    loaded: bool
+    size_bytes: int = 0
+    classes: list[str] = []
+    confidence_threshold: float = 0.5
+    imgsz: int = 640
+    architecture: str = "YOLOv8"
+
+
+class DetectorProfileOut(BaseModel):
+    key: str
+    label: str
+    description: str
+    components: list[str]
+    accent: str = "emerald"
+    cameras: int = 0
+
+
+class ModelCatalogOut(BaseModel):
+    components: list[DetectorComponentOut]
+    profiles: list[DetectorProfileOut]
+    versions: list[ModelVersionOut] = []
+    production: ModelVersionOut | None = None
+    active_weights: str = ""
+    reloaded_at: str = ""
+    hls: dict = {}

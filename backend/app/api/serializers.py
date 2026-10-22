@@ -26,8 +26,21 @@ def has_credentials(raw_url: str | None) -> bool:
         return False
 
 
+def source_kind(raw_url: str | None) -> str:
+    """Тип источника камеры: виртуальный поток, RTSP, HTTP(S) или локальный файл."""
+    url = (raw_url or "").strip().lower()
+    if url.startswith(("sim://", "demo://")):
+        return "simulated"
+    if url.startswith(("rtsp://", "rtsps://")):
+        return "rtsp"
+    if url.startswith(("http://", "https://")):
+        return "http"
+    return "file"
+
+
 def serialize_camera(cam: Camera) -> CameraOut:
-    tel = stream_manager.get_telemetry(cam.id)
+    tel = dict(stream_manager.get_telemetry(cam.id))
+    profile = tel.pop("detector_profile", None) or getattr(cam, "detector_profile", "ensemble")
     return CameraOut(
         id=cam.id,
         name=cam.name,
@@ -37,6 +50,8 @@ def serialize_camera(cam: Camera) -> CameraOut:
         has_credentials=has_credentials(cam.rtsp_url),
         is_active=cam.is_active,
         created_at=cam.created_at,
+        source_kind=source_kind(cam.rtsp_url),
+        detector_profile=profile,
         **tel,
     )
 

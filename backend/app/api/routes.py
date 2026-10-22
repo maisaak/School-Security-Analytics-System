@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.api.schemas import (
     CameraCreate,
+    CameraDetectorUpdate,
     CameraOut,
     SimulateRequest,
     ViolationOut,
@@ -21,6 +22,7 @@ from app.api.schemas import (
 from app.api.serializers import serialize_camera, serialize_violation
 from app.core.auth import require_permissions
 from app.core.config import settings
+from app.core.detector_profiles import DETECTOR_PROFILES, profile_catalog
 from app.core.permissions import Permission, role_permissions
 from app.core.security import (
     read_upload_limited,
@@ -31,6 +33,7 @@ from app.db.models import Camera, ModelVersion, User, Violation
 from app.db.session import SessionLocal, get_db
 from app.models.detector import detector
 from app.services.audit import record_audit
+from app.services.hls import playlist_path as hls_playlist_path, resolve_segment as resolve_hls_segment
 from app.services.stream_manager import encode_h264_clip, stream_manager
 
 router = APIRouter(prefix="/api")
@@ -65,7 +68,9 @@ def add_camera(
     db.add(cam)
     db.commit()
     db.refresh(cam)
-    stream_manager.start_camera(cam.id, cam.name, cam.rtsp_url, is_active=True)
+    stream_manager.start_camera(
+        cam.id, cam.name, cam.rtsp_url, is_active=True, detector_profile=cam.detector_profile
+    )
     record_audit(
         db,
         action="camera.create",
@@ -102,6 +107,71 @@ def toggle_camera(
         detail={"name": cam.name, "is_active": cam.is_active},
     )
     return serialize_camera(cam)
+
+
+@router.patch("/cameras/{camera_id}/detector", response_model=CameraOut)
+def update_camera_detector(
+    camera_id: int,
+    payload: CameraDetectorUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permissions(Permission.CAMERAS_MANAGE)),
+):
+    """
+    Админ выбирает, какие модели YOLO работают на конкретной камере.
+
+    Профиль применяется на лету — воркер камеры переключает набор моделей
+    без перезапуска потока и без разрыва HLS/MJPEG.
+    """
+    profile = (payload.profile or "").strip().lower()
+    if profile not in DETECTOR_PROFILES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Неизвестный профиль детекции. Доступны: "
+                + ", ".join(DETECTOR_PROFILES.keys())
+            ),
+        )
+
+    cam = db.query(Camera).filter(Camera.id == camera_id).first()
+    if not cam:
+        raise HTTPException(status_code=404, detail="Камера не найдена")
+
+    previous = cam.detector_profile or "ensemble"
+    cam.detector_profile = profile
+    db.commit()
+    db.refresh(cam)
+    stream_manager.set_detector_profile(cam.id, profile)
+
+    record_audit(
+        db,
+        action="camera.detector.update",
+        request=request,
+        user=user,
+        entity_type="camera",
+        entity_id=cam.id,
+        detail={
+            "name": cam.name,
+            "previous_profile": previous,
+            "detector_profile": profile,
+            "components": list(DETECTOR_PROFILES[profile].components),
+        },
+    )
+    return serialize_camera(cam)
+
+
+@router.get("/detector/profiles")
+def detector_profiles(_: User = Depends(require_permissions(Permission.CAMERAS_VIEW))):
+    """Справочник профилей детекции — нужен UI выбора моделей на камере."""
+    db = SessionLocal()
+    try:
+        counts: dict[str, int] = {}
+        for cam in db.query(Camera).all():
+            key = cam.detector_profile or settings.DETECTOR_PROFILE
+            counts[key] = counts.get(key, 0) + 1
+    finally:
+        db.close()
+    return {"profiles": profile_catalog(counts)}
 
 
 @router.post("/cameras/{camera_id}/simulate")
@@ -221,6 +291,47 @@ async def stream_camera(
             # передаём в percent-encoding, иначе Starlette падает с UnicodeEncodeError.
             "X-Camera-Name": quote(camera_name[:80], safe=""),
         },
+    )
+
+
+@router.get("/cameras/{camera_id}/hls/index.m3u8")
+def camera_hls_playlist(
+    camera_id: int,
+    _: User = Depends(require_permissions(Permission.CAMERAS_VIEW)),
+):
+    """
+    HLS-плейлист камеры.
+
+    Аннотированные кадры (рамки YOLO + HUD) кодируются в H.264 и нарезаются на
+    mpeg-ts сегменты: браузер играет обычный <video> вместо MJPEG-перерисовки.
+    Сегменты лежат рядом, поэтому hls.js запрашивает их относительно плейлиста.
+    """
+    path = hls_playlist_path(camera_id)
+    if not path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="HLS-поток ещё не готов. Подождите несколько секунд после старта камеры.",
+        )
+    return FileResponse(
+        path,
+        media_type="application/vnd.apple.mpegurl",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
+@router.get("/cameras/{camera_id}/hls/{segment}")
+def camera_hls_segment(
+    camera_id: int,
+    segment: str,
+    _: User = Depends(require_permissions(Permission.CAMERAS_VIEW)),
+):
+    path = resolve_hls_segment(camera_id, segment)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Сегмент не найден")
+    return FileResponse(
+        path,
+        media_type="video/mp2t",
+        headers={"Cache-Control": "no-cache"},
     )
 
 

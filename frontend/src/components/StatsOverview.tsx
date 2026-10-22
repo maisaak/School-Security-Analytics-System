@@ -17,7 +17,7 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats }) => {
     {
       title: "Активные потоки RTSP",
       value: stats ? `${stats.active_cameras} / ${stats.total_cameras}` : "—",
-      sub: "Живой MJPEG + инференс YOLOv8",
+      sub: "Живой HLS + инференс YOLOv8",
       icon: Video,
       accent: "text-emerald-400 bg-emerald-500/10 border-emerald-500/25",
     },

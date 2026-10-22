@@ -39,6 +39,9 @@ export interface BagTrack {
   observed: boolean;
 }
 
+export type StreamMode = "hls" | "mjpeg";
+export type SourceKind = "simulated" | "rtsp" | "http" | "file";
+
 export interface Camera {
   id: number;
   name: string;
@@ -54,6 +57,47 @@ export interface Camera {
   active_threats: string[];
   bag_tracking: BagTrack[];
   is_simulated: boolean;
+  source_kind: SourceKind;
+  detector_profile: string;
+  stream_mode: StreamMode;
+  hls_ready: boolean;
+}
+
+export interface DetectorComponent {
+  role: "coco" | "weapon" | "custom" | string;
+  label: string;
+  filename: string;
+  exists: boolean;
+  loaded: boolean;
+  size_bytes: number;
+  classes: string[];
+  confidence_threshold: number;
+  imgsz: number;
+  architecture: string;
+}
+
+export interface DetectorProfile {
+  key: string;
+  label: string;
+  description: string;
+  components: string[];
+  accent: string;
+  cameras: number;
+}
+
+export interface ModelCatalog {
+  components: DetectorComponent[];
+  profiles: DetectorProfile[];
+  versions: ModelVersion[];
+  production: ModelVersion | null;
+  active_weights: string;
+  reloaded_at: string;
+  hls: {
+    enabled: boolean;
+    segment_sec: number;
+    max_segments: number;
+    ready_cameras: number[];
+  };
 }
 
 export interface Violation {
@@ -394,6 +438,13 @@ export const api = {
 
   toggleCamera: (id: number) => request<Camera>(`/cameras/${id}/toggle`, { method: "POST" }),
 
+  setCameraDetector: (id: number, profile: string) =>
+    request<Camera>(`/cameras/${id}/detector`, jsonInit("PATCH", { profile })),
+
+  getDetectorProfiles: () => request<{ profiles: DetectorProfile[] }>("/detector/profiles"),
+
+  getModelCatalog: () => request<ModelCatalog>("/models/catalog"),
+
   deleteCamera: (id: number) => request<void>(`/cameras/${id}`, { method: "DELETE" }),
 
   simulateEvent: (
@@ -426,6 +477,27 @@ export const api = {
     withToken(`/api/violations/${violation.id}/video?download=true`),
 
   streamUrl: (cameraId: number) => withToken(`/api/cameras/${cameraId}/stream`),
+
+  // HLS-плейлист: hls.js сам запросит сегменты рядом с ним
+  hlsUrl: (cameraId: number) => `${API_BASE}/cameras/${cameraId}/hls/index.m3u8`,
+
+  /**
+   * Авторизация XHR-запросов hls.js: тег <video> не умеет отправлять заголовки,
+   * а сегменты HLS грузятся через XHR, поэтому токен добавляем вручную.
+   */
+  authorizeXhr: (xhr: XMLHttpRequest, url: string) => {
+    const token = getAccessToken();
+    if (!token) return;
+    // Токен кладём и в заголовок, и в URL: если превью-прокси вырежет
+    // Authorization, запрос за плейлистом/сегментом всё равно авторизуется.
+    const target = url.includes("token=")
+      ? url
+      : `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
+    xhr.open("GET", target, true);
+    if (!queryAuthMode) {
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
+  },
 
   cameraSnapshotUrl: (cameraId: number) => withToken(`/api/cameras/${cameraId}/snapshot`),
 

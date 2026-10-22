@@ -100,6 +100,16 @@ class Settings(BaseSettings):
     VIOLATION_COOLDOWN_SEC: int = 12
     STREAM_TARGET_FPS: float = 12.0
     DETECT_EVERY_N_FRAMES: int = 3
+    # Профиль детекции по умолчанию для камер без явного выбора администратора
+    DETECTOR_PROFILE: str = "ensemble"
+
+    # ── HLS-трансляция (вместо MJPEG) ─────────────────────────────────────────
+    # Аннотированные кадры кодируются в H.264 и отдаются браузеру как HLS:
+    # для RTSP-камер это даёт нормальный видеоплеер, а не перерисовку <img>.
+    HLS_ENABLED: bool = True
+    HLS_SEGMENT_SEC: float = 1.0
+    HLS_MAX_SEGMENTS: int = 6
+    HLS_VIDEO_CODEC: str = "libx264"
 
     MEDIA_ROOT: Path = PROJECT_ROOT / "media"
 
@@ -123,6 +133,6 @@ settings.MODEL_VERSIONS_ROOT = _resolve_repo_path(settings.MODEL_VERSIONS_ROOT)
 if not (settings.JWT_SECRET_KEY or "").strip():
     settings.JWT_SECRET_KEY = _load_or_create_jwt_secret()
 
-for sub in ("snapshots", "videos", "uploads"):
+for sub in ("snapshots", "videos", "uploads", "hls"):
     (settings.MEDIA_ROOT / sub).mkdir(parents=True, exist_ok=True)
 settings.MODEL_VERSIONS_ROOT.mkdir(parents=True, exist_ok=True)

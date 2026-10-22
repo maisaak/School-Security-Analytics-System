@@ -44,6 +44,8 @@ class Camera(Base):
     location = Column(String(160), default="Главный вход")
     rtsp_url = Column(String(512), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    # Профиль детекции YOLO, выбранный администратором (см. core/detector_profiles.py)
+    detector_profile = Column(String(32), default="ensemble", nullable=False, server_default="ensemble")
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     violations = relationship(
