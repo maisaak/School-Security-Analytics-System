@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
@@ -84,16 +85,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+wildcard_cors = "*" in settings.CORS_ORIGINS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=not wildcard_cors,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
 app.mount("/media", StaticFiles(directory=str(settings.MEDIA_ROOT)), name="media")
 app.include_router(router)
+
+
+@app.get("/", include_in_schema=False)
+def root_redirect():
+    return RedirectResponse(url="/docs")
 
 
 @app.get("/health")

@@ -90,10 +90,12 @@ def train_model(
     save_dir = Path(results.save_dir)
     best_candidate = save_dir / "weights" / "best.pt"
     last_candidate = save_dir / "weights" / "last.pt"
-    if best_candidate.exists():
-        shutil.copy2(best_candidate, out_pt)
-    elif last_candidate.exists():
-        shutil.copy2(last_candidate, out_pt)
+    chosen = best_candidate if best_candidate.exists() else (last_candidate if last_candidate.exists() else None)
+    if chosen is not None:
+        import os as _os
+        tmp_pt = out_pt.with_suffix(".pt.tmp")
+        shutil.copy2(chosen, tmp_pt)
+        _os.replace(tmp_pt, out_pt)
 
     raw_metrics = getattr(results, "results_dict", {}) or {}
     clean_metrics = {

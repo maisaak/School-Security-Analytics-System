@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import cv2
 import numpy as np
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -21,13 +21,21 @@ from app.api.schemas import (
     ViolationOut,
 )
 from app.core.config import PROJECT_ROOT, settings
+from app.core.security import (
+    read_upload_limited,
+    safe_delete_media_file,
+    validate_dataset_yaml,
+    validate_stream_source,
+    verify_api_key,
+)
 from app.db.models import Camera, RetrainJob, Violation
 from app.db.session import get_db
 from app.models.detector import detector
 from app.services.stream_manager import encode_h264_clip, stream_manager
 from app.services.tasks import celery_app, execute_retrain_job, retrain_model_task
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", dependencies=[Depends(verify_api_key)])
+RETRAIN_LOCK = threading.Lock()
 
 
 def _serialize_camera(cam: Camera) -> CameraOut:
@@ -87,10 +95,11 @@ def _serialize_job(job: RetrainJob) -> RetrainJobOut:
 
 @router.post("/cameras", response_model=CameraOut, status_code=status.HTTP_201_CREATED)
 def add_camera(payload: CameraCreate, db: Session = Depends(get_db)):
+    validated_url = validate_stream_source(payload.rtsp_url)
     cam = Camera(
         name=payload.name.strip(),
         location=payload.location.strip() or "Периметр школы",
-        rtsp_url=payload.rtsp_url.strip(),
+        rtsp_url=validated_url,
         is_active=True,
     )
     db.add(cam)
@@ -135,6 +144,9 @@ def delete_camera(camera_id: int, db: Session = Depends(get_db)):
     if not cam:
         raise HTTPException(status_code=404, detail="Камера не найдена")
     stream_manager.stop_camera(camera_id)
+    for v in cam.violations:
+        safe_delete_media_file(v.image_path)
+        safe_delete_media_file(v.video_path)
     db.delete(cam)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -149,17 +161,23 @@ def camera_snapshot(camera_id: int):
 
 
 @router.get("/cameras/{camera_id}/stream")
-async def stream_camera(camera_id: int, db: Session = Depends(get_db)):
+async def stream_camera(camera_id: int, request: Request, db: Session = Depends(get_db)):
     cam = db.query(Camera).filter(Camera.id == camera_id).first()
     if not cam:
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
     async def mjpeg_generator():
+        last_sent_seq = -1
         while True:
-            frame = stream_manager.get_frame(camera_id)
-            if frame:
+            if await request.is_disconnected():
+                break
+            if not stream_manager.has_camera(camera_id):
+                break
+            frame, seq = stream_manager.get_frame_with_seq(camera_id)
+            if frame and seq != last_sent_seq:
+                last_sent_seq = seq
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
-            await asyncio.sleep(1.0 / 12.0)
+            await asyncio.sleep(1.0 / 15.0)
 
     return StreamingResponse(
         mjpeg_generator(),
@@ -206,6 +224,8 @@ def delete_violation(violation_id: int, db: Session = Depends(get_db)):
     row = db.query(Violation).filter(Violation.id == violation_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Инцидент не найден")
+    safe_delete_media_file(row.image_path)
+    safe_delete_media_file(row.video_path)
     db.delete(row)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -218,7 +238,13 @@ def get_violation_video(violation_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Видеозапись инцидента не найдена")
 
     rel = row.video_path.removeprefix("/media/")
-    file_path = (settings.MEDIA_ROOT / rel).resolve()
+    media_root = settings.MEDIA_ROOT.resolve()
+    file_path = (media_root / rel).resolve()
+    try:
+        file_path.relative_to(media_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Недопустимый путь видеофайла") from exc
+
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="Видеофайл отсутствует на диске")
 
@@ -233,19 +259,21 @@ async def analyze_uploaded_media(
     save_violation: bool = Form(default=True),
     db: Session = Depends(get_db),
 ):
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Пустой файл")
-
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     suffix = Path(file.filename or "upload.jpg").suffix.lower()
     is_video = suffix in {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+    max_bytes = (settings.MAX_UPLOAD_VIDEO_MB if is_video else settings.MAX_UPLOAD_IMAGE_MB) * 1024 * 1024
+    content = await read_upload_limited(file, max_bytes=max_bytes)
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
     if not is_video:
         arr = np.frombuffer(content, dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if img is None:
             raise HTTPException(status_code=400, detail="Не удалось декодировать изображение")
+
+        if img.shape[0] > 4096 or img.shape[1] > 4096:
+            img = cv2.resize(img, (1280, int(1280 * img.shape[0] / img.shape[1])), interpolation=cv2.INTER_AREA)
 
         annotated, analysis = detector.analyze_frame(img, camera_title="ПРОВЕРКА МЕДИАФАЙЛА")
         out_rel = f"uploads/analyzed_{stamp}.jpg"
@@ -280,33 +308,31 @@ async def analyze_uploaded_media(
             "saved_violation_ids": saved_ids,
         }
 
-    # Обработка загруженного видеофайла
     raw_vid = settings.MEDIA_ROOT / "uploads" / f"raw_{stamp}{suffix}"
     raw_vid.write_bytes(content)
 
     cap = cv2.VideoCapture(str(raw_vid))
     frames_out: list[np.ndarray] = []
     aggregated_violations: list[dict] = []
-    best_snapshot: np.ndarray | None = None
     idx = 0
     last_an = {"violations": [], "safe_objects": [], "latency_ms": 0.0}
 
-    while len(frames_out) < 90:
-        ok, frm = cap.read()
-        if not ok or frm is None:
-            break
-        frm = cv2.resize(frm, (960, 540), interpolation=cv2.INTER_AREA)
-        if idx % 3 == 0:
-            last_an = detector.detect_frame(frm)
-            for v in last_an["violations"]:
-                aggregated_violations.append(v)
-        ann = detector.annotate_frame(frm, last_an, camera_title="ПРОВЕРКА ВИДЕОФАЙЛА")
-        if last_an["violations"] and best_snapshot is None:
-            best_snapshot = ann.copy()
-        frames_out.append(ann)
-        idx += 1
-    cap.release()
-    raw_vid.unlink(missing_ok=True)
+    try:
+        while len(frames_out) < 90:
+            ok, frm = cap.read()
+            if not ok or frm is None:
+                break
+            frm = cv2.resize(frm, (960, 540), interpolation=cv2.INTER_AREA)
+            if idx % 3 == 0:
+                last_an = detector.detect_frame(frm)
+                for v in last_an["violations"]:
+                    aggregated_violations.append(v)
+            ann = detector.annotate_frame(frm, last_an, camera_title="ПРОВЕРКА ВИДЕОФАЙЛА")
+            frames_out.append(ann)
+            idx += 1
+    finally:
+        cap.release()
+        raw_vid.unlink(missing_ok=True)
 
     if not frames_out:
         raise HTTPException(status_code=400, detail="Не удалось прочитать кадры видео")
@@ -343,7 +369,6 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
         if not v.is_acknowledged:
             unack_count += 1
 
-    # Поминутная/интервальная шкала последних 8 окон для живого графика активности
     now = datetime.now(timezone.utc)
     buckets = []
     for i in range(7, -1, -1):
@@ -400,14 +425,13 @@ async def upload_training_sample(
 
     ensure_custom_dataset(PROJECT_ROOT)
 
-    content = await file.read()
+    content = await read_upload_limited(file, max_bytes=settings.MAX_UPLOAD_IMAGE_MB * 1024 * 1024)
     arr = np.frombuffer(content, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
         raise HTTPException(status_code=400, detail="Не удалось прочитать изображение")
 
     img_resized = cv2.resize(img, (960, 540), interpolation=cv2.INTER_AREA)
-    # Авто-поиск области объекта (либо через текущий детектор, либо центральная область 70%)
     an = detector.detect_frame(img_resized)
     bbox = None
     for v in an["violations"]:
@@ -418,7 +442,7 @@ async def upload_training_sample(
         rgba = extract_foreground_rgba(img_resized)
         ys, xs = np.where(rgba[:, :, 3] > 128)
         if len(xs) > 50 and len(ys) > 50:
-            bbox = [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())]
+            bbox = [int(xs.min()), int(ys.min()), int(xs.max()), int(xs.max())]
         else:
             bbox = [144, 81, 816, 459]
 
@@ -452,20 +476,24 @@ def list_retrain_jobs(db: Session = Depends(get_db)):
 
 @router.post("/models/retrain", response_model=RetrainJobOut)
 def retrain_model(payload: RetrainRequest, db: Session = Depends(get_db)):
-    active = db.query(RetrainJob).filter(RetrainJob.status.in_(["queued", "running"])).first()
-    if active:
-        raise HTTPException(status_code=409, detail=f"Задача дообучения #{active.id} уже выполняется")
+    safe_yaml = validate_dataset_yaml(payload.dataset_yaml)
+    rel_yaml = safe_yaml.relative_to(PROJECT_ROOT).as_posix()
 
-    job = RetrainJob(
-        status="queued",
-        epochs=payload.epochs,
-        current_epoch=0,
-        dataset_yaml=payload.dataset_yaml,
-        details="Поставлена в очередь обучения",
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
+    with RETRAIN_LOCK:
+        active = db.query(RetrainJob).filter(RetrainJob.status.in_(["queued", "running"])).first()
+        if active:
+            raise HTTPException(status_code=409, detail=f"Задача дообучения #{active.id} уже выполняется")
+
+        job = RetrainJob(
+            status="queued",
+            epochs=payload.epochs,
+            current_epoch=0,
+            dataset_yaml=rel_yaml,
+            details="Поставлена в очередь обучения",
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
 
     dispatched_celery = False
     try:
@@ -474,7 +502,7 @@ def retrain_model(payload: RetrainRequest, db: Session = Depends(get_db)):
         if r_client.ping():
             workers = celery_app.control.inspect(timeout=0.4).active()
             if workers:
-                retrain_model_task.delay(job.id, payload.epochs, payload.dataset_yaml)
+                retrain_model_task.delay(job.id, payload.epochs, rel_yaml)
                 dispatched_celery = True
     except Exception:
         dispatched_celery = False
@@ -482,7 +510,7 @@ def retrain_model(payload: RetrainRequest, db: Session = Depends(get_db)):
     if not dispatched_celery:
         threading.Thread(
             target=execute_retrain_job,
-            args=(job.id, payload.epochs, payload.dataset_yaml),
+            args=(job.id, payload.epochs, rel_yaml),
             daemon=True,
         ).start()
 

@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 
 from app.core.config import settings
+from app.core.security import safe_delete_media_file
 from app.db.models import Violation
 from app.db.session import SessionLocal
 from app.models.detector import detector
@@ -101,6 +102,7 @@ class CameraWorker(threading.Thread):
         )
 
         self.latest_jpeg: bytes | None = None
+        self.latest_seq: int = 0
         self.frame_buffer: deque[np.ndarray] = deque(maxlen=54)  # ~4.5 секунды видеофрагмента
         self.last_analysis: dict = {"violations": [], "safe_objects": [], "person_count": 0, "latency_ms": 0.0}
         self.last_violation_ts: dict[str, float] = {}
@@ -150,6 +152,21 @@ class CameraWorker(threading.Thread):
             )
             db.add(row)
             db.commit()
+
+            # Ротация старых записей, чтобы диск не переполнялся при 24/7 работе
+            total_count = db.query(Violation).count()
+            if total_count > settings.MAX_STORED_VIOLATIONS:
+                stale = (
+                    db.query(Violation)
+                    .order_by(Violation.id.asc())
+                    .limit(total_count - settings.MAX_STORED_VIOLATIONS)
+                    .all()
+                )
+                for old_v in stale:
+                    safe_delete_media_file(old_v.image_path)
+                    safe_delete_media_file(old_v.video_path)
+                    db.delete(old_v)
+                db.commit()
         finally:
             db.close()
 
@@ -250,6 +267,7 @@ class CameraWorker(threading.Thread):
         ok, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
         if ok:
             self.latest_jpeg = buf.tobytes()
+            self.latest_seq += 1
 
         now = time.monotonic()
         for item in self.last_analysis.get("violations", []):
@@ -302,9 +320,18 @@ class StreamManager:
             return False
         return worker.trigger_scenario(scenario)
 
+    def has_camera(self, camera_id: int) -> bool:
+        return camera_id in self._workers
+
     def get_frame(self, camera_id: int) -> bytes | None:
         worker = self._workers.get(camera_id)
         return worker.latest_jpeg if worker else None
+
+    def get_frame_with_seq(self, camera_id: int) -> tuple[bytes | None, int]:
+        worker = self._workers.get(camera_id)
+        if not worker:
+            return None, -1
+        return worker.latest_jpeg, worker.latest_seq
 
     def get_telemetry(self, camera_id: int) -> dict:
         worker = self._workers.get(camera_id)

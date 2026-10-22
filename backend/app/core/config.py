@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     DATABASE_URL: str = f"sqlite:///{(PROJECT_ROOT / 'school_security.db').as_posix()}"
     REDIS_URL: str = "redis://localhost:6379/0"
 
+    API_KEY: str = ""
+    CORS_ORIGINS: list[str] = ["*"]
+    ALLOW_PRIVATE_RTSP: bool = True
+    ALLOW_LOCAL_WEBCAM: bool = False
+
+    MAX_UPLOAD_IMAGE_MB: int = 15
+    MAX_UPLOAD_VIDEO_MB: int = 60
+    MAX_STORED_VIOLATIONS: int = 250
+
     YOLO_COCO_MODEL_PATH: Path = PROJECT_ROOT / "ml" / "models" / "yolov8n.pt"
     YOLO_WEAPON_MODEL_PATH: Path = PROJECT_ROOT / "ml" / "models" / "weapon_yolov8.pt"
     YOLO_CUSTOM_MODEL_PATH: Path = PROJECT_ROOT / "ml" / "models" / "school_security_best.pt"

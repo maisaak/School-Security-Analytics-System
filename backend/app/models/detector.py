@@ -7,8 +7,11 @@ from datetime import datetime
 from pathlib import Path
 import cv2
 import numpy as np
+import torch
 from PIL import Image, ImageDraw, ImageFont
 from ultralytics import YOLO
+
+torch.set_num_threads(2)
 
 from app.core.config import PROJECT_ROOT, settings
 
@@ -98,7 +101,26 @@ class ViolationDetector:
             if self.custom_model is not None
             else Path(settings.YOLO_COCO_MODEL_PATH).name
         )
+        self._custom_mtime: float = (
+            Path(settings.YOLO_CUSTOM_MODEL_PATH).stat().st_mtime
+            if Path(settings.YOLO_CUSTOM_MODEL_PATH).is_file()
+            else 0.0
+        )
+        self._last_mtime_check: float = time.monotonic()
         self.reloaded_at: str = datetime.now().isoformat(timespec="seconds")
+
+    def _maybe_reload_from_disk(self) -> None:
+        """Автоматически подхватывает обновлённые веса, если обучение завершилось во внешнем процессе Celery."""
+        now = time.monotonic()
+        if now - self._last_mtime_check < 2.0:
+            return
+        self._last_mtime_check = now
+        custom_path = Path(settings.YOLO_CUSTOM_MODEL_PATH)
+        if not custom_path.is_file():
+            return
+        mtime = custom_path.stat().st_mtime
+        if mtime > self._custom_mtime:
+            self.reload_custom_weights(custom_path)
 
     def reload_custom_weights(self, weights_path: str | Path | None = None) -> None:
         target = Path(weights_path) if weights_path else Path(settings.YOLO_CUSTOM_MODEL_PATH)
@@ -107,12 +129,15 @@ class ViolationDetector:
         if not target.is_file():
             return
         loaded = YOLO(str(target))
+        mtime = target.stat().st_mtime
         with self._lock:
             self.custom_model = loaded
+            self._custom_mtime = mtime
             self.active_weights_name = target.name
             self.reloaded_at = datetime.now().isoformat(timespec="seconds")
 
     def detect_frame(self, frame: np.ndarray) -> dict:
+        self._maybe_reload_from_disk()
         t0 = time.perf_counter()
         h, w = frame.shape[:2]
         diag = math.hypot(w, h)
