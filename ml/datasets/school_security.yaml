@@ -1,0 +1,8 @@
+path: ml/datasets/custom
+train: images/train
+val: images/val
+
+names:
+  0: dog
+  1: weapon
+  2: suspicious_bag
