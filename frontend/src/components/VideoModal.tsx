@@ -31,7 +31,7 @@ export const VideoModal: React.FC<VideoModalProps> = ({
               {meta.title}
             </span>
             <div className="min-w-0">
-              <h3 className="font-semibold text-white text-sm truncate">
+              <h3 className="font-semibold text-ink text-sm truncate">
                 Инцидент #{violation.id} · {violation.camera_name}
               </h3>
               <p className="text-[11px] text-slate-400 truncate">
@@ -43,7 +43,7 @@ export const VideoModal: React.FC<VideoModalProps> = ({
 
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-ink hover:bg-slate-800"
           >
             <X className="w-5 h-5" />
           </button>
@@ -92,7 +92,7 @@ export const VideoModal: React.FC<VideoModalProps> = ({
               {canAck && (
                 <button
                   onClick={() => onAcknowledge(violation.id)}
-                  className={`w-full py-2 px-3 rounded-xl text-[11px] font-medium text-white flex items-center justify-center gap-2 transition ${
+                  className={`w-full py-2 px-3 rounded-xl text-[11px] font-medium text-ink flex items-center justify-center gap-2 transition ${
                     violation.is_acknowledged
                       ? "bg-slate-700 hover:bg-slate-600"
                       : "bg-emerald-600 hover:bg-emerald-500"

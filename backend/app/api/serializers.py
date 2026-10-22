@@ -129,6 +129,7 @@ def serialize_version(version: ModelVersion, current_id: int | None = None) -> M
         validation_notes=version.validation_notes or "",
         job_id=version.job_id,
         source=version.source,
+        architecture=getattr(version, "architecture", None) or "yolov8",
         size_bytes=version.size_bytes or 0,
         sha256=version.sha256 or "",
         created_by=version.created_by or "system",

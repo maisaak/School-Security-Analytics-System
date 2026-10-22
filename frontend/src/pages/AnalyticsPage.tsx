@@ -108,7 +108,7 @@ export const AnalyticsPage: React.FC = () => {
     <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+          <h2 className="text-lg font-semibold text-ink flex items-center gap-2">
             <BarChart3 className="w-5 h-5 text-sky-400" />
             Аналитика безопасности
           </h2>
@@ -169,7 +169,7 @@ export const AnalyticsPage: React.FC = () => {
           <div key={title} className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 flex items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="text-[11px] text-slate-400">{title}</p>
-              <p className="text-2xl font-bold text-white mt-1">{value}</p>
+              <p className="text-2xl font-bold text-ink mt-1">{value}</p>
               <p className="text-[10px] text-slate-500 mt-1">{sub}</p>
             </div>
             <div className={`p-2.5 rounded-xl border shrink-0 ${tone}`}>
@@ -225,7 +225,7 @@ export const AnalyticsPage: React.FC = () => {
               [
                 "Средний инференс",
                 stats ? `${stats.model.avg_latency_ms.toFixed(1)} мс` : "—",
-                "font-mono text-indigo-300",
+                "font-mono text-brand-300",
               ],
               ["Перезагрузка весов", stats ? formatDateTime(stats.model.reloaded_at) : "—", "text-slate-400"],
             ].map(([label, value, cls]) => (

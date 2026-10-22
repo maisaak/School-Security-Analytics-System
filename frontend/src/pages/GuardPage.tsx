@@ -92,7 +92,7 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+          <h2 className="text-lg font-semibold text-ink flex items-center gap-2">
             <ShieldAlert className="w-5 h-5 text-amber-400" />
             Рабочее место охранника КПП
           </h2>
@@ -175,7 +175,7 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
                   </button>
 
                   <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-slate-950/95 to-transparent px-2.5 py-2">
-                    <p className="text-[11px] font-semibold text-white truncate">{cam.name}</p>
+                    <p className="text-[11px] font-semibold text-ink truncate">{cam.name}</p>
                     <p className="text-[10px] text-slate-400 truncate">
                       {cam.location} · {cam.fps.toFixed(0)} FPS · {cam.person_count} чел.
                     </p>
@@ -249,7 +249,7 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
                           className="w-full h-full object-cover group-hover:scale-105 transition"
                         />
                         <span className="absolute inset-0 flex items-center justify-center bg-black/35 opacity-0 group-hover:opacity-100 transition">
-                          <Play className="w-4 h-4 text-white fill-white" />
+                          <Play className="w-4 h-4 text-ink fill-white" />
                         </span>
                       </button>
 
@@ -327,12 +327,12 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-6xl w-full p-3 space-y-2">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-sm font-semibold text-white">{expandedCamera.name}</h3>
+                <h3 className="text-sm font-semibold text-ink">{expandedCamera.name}</h3>
                 <p className="text-[11px] text-slate-400">{expandedCamera.location}</p>
               </div>
               <button
                 onClick={() => setExpandedCamera(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-ink hover:bg-slate-800"
               >
                 <X className="w-5 h-5" />
               </button>

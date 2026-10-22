@@ -133,11 +133,18 @@ class ViolationDetector:
     def _component_entry(self, role: str, model, path: Path, conf: float, imgsz: int) -> dict:
         exists = path.is_file()
         classes: list[str] = []
+        architecture = "yolov8"
         if model is not None:
             try:
                 classes = sorted({str(v) for v in dict(model.names).values()})
             except Exception:
                 classes = []
+            try:
+                from app.services.model_registry import detect_architecture
+
+                architecture = detect_architecture(model)
+            except Exception:
+                architecture = "custom"
         return {
             "role": role,
             "label": COMPONENT_LABELS.get(role, role),
@@ -148,7 +155,7 @@ class ViolationDetector:
             "classes": classes,
             "confidence_threshold": conf,
             "imgsz": imgsz,
-            "architecture": "YOLOv8",
+            "architecture": architecture,
         }
 
     def describe_components(self) -> list[dict]:

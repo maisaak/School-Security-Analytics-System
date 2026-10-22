@@ -95,8 +95,8 @@ export const AuditPage: React.FC = () => {
     <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-            <ScrollText className="w-5 h-5 text-indigo-400" />
+          <h2 className="text-lg font-semibold text-ink flex items-center gap-2">
+            <ScrollText className="w-5 h-5 text-brand-400" />
             Полный журнал аудита
           </h2>
           <p className="text-[11px] text-slate-400">
@@ -113,7 +113,7 @@ export const AuditPage: React.FC = () => {
           {can("audit:view") && (
             <a
               href={api.auditExportUrl}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-[11px] font-medium text-white transition"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-[11px] font-medium text-white transition"
             >
               <Download className="w-3.5 h-3.5" /> Экспорт CSV
             </a>
@@ -124,7 +124,7 @@ export const AuditPage: React.FC = () => {
       {summary && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {[
-            { label: "Всего событий", value: summary.total, icon: Activity, tone: "text-indigo-400" },
+            { label: "Всего событий", value: summary.total, icon: Activity, tone: "text-brand-400" },
             { label: "За сегодня", value: summary.today, icon: ShieldCheck, tone: "text-emerald-400" },
             { label: "Отказов в доступе", value: summary.denied, icon: ShieldAlert, tone: "text-red-400" },
           ].map(({ label, value, icon: Icon, tone }) => (
@@ -132,7 +132,7 @@ export const AuditPage: React.FC = () => {
               <Icon className={`w-5 h-5 ${tone}`} />
               <div>
                 <p className="text-[11px] text-slate-400">{label}</p>
-                <p className="text-xl font-bold text-white">{value}</p>
+                <p className="text-xl font-bold text-ink">{value}</p>
               </div>
             </div>
           ))}
@@ -151,7 +151,7 @@ export const AuditPage: React.FC = () => {
                 setAction(e.target.value);
                 setOffset(0);
               }}
-              className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-indigo-500 max-w-[210px]"
+              className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-brand-500 max-w-[210px]"
             >
               <option value="">Все действия</option>
               {(data?.actions ?? []).map((a) => (
@@ -166,7 +166,7 @@ export const AuditPage: React.FC = () => {
                 setOutcome(e.target.value);
                 setOffset(0);
               }}
-              className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-indigo-500"
+              className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-brand-500"
             >
               <option value="">Любой исход</option>
               <option value="success">Успех</option>
@@ -180,7 +180,7 @@ export const AuditPage: React.FC = () => {
                 setOffset(0);
               }}
               placeholder="Поиск по деталям…"
-              className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-[11px] text-slate-200 w-40 focus:outline-none focus:border-indigo-500"
+              className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-[11px] text-slate-200 w-40 focus:outline-none focus:border-brand-500"
             />
           </div>
         }

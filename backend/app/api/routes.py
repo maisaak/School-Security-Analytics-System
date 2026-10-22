@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -356,6 +358,96 @@ def list_violations(
 
     rows = query.order_by(Violation.detected_at.desc(), Violation.id.desc()).limit(min(limit, 500)).all()
     return [serialize_violation(r) for r in rows]
+
+
+@router.get("/violations/export")
+def export_violations(
+    request: Request,
+    violation_type: str | None = None,
+    camera_id: int | None = None,
+    unacknowledged_only: bool = False,
+    limit: int = 5000,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permissions(Permission.VIOLATIONS_VIEW)),
+):
+    """
+    Выгрузка журнала нарушений в CSV (разделитель «;», UTF-8 с BOM — открывается в Excel).
+
+    Учитывает те же фильтры, что и таблица на дашборде, поэтому выгружается
+    ровно то, что пользователь видит на экране.
+    """
+    query = db.query(Violation).outerjoin(Camera)
+    if violation_type:
+        query = query.filter(Violation.violation_type == violation_type)
+    if camera_id:
+        query = query.filter(Violation.camera_id == camera_id)
+    if unacknowledged_only:
+        query = query.filter(Violation.is_acknowledged.is_(False))
+
+    rows = (
+        query.order_by(Violation.detected_at.desc(), Violation.id.desc())
+        .limit(max(1, min(limit, 20000)))
+        .all()
+    )
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, delimiter=";")
+    writer.writerow(
+        [
+            "id",
+            "detected_at",
+            "camera",
+            "location",
+            "violation_type",
+            "confidence",
+            "track_id",
+            "dwell_seconds",
+            "acknowledged",
+            "acknowledged_by",
+            "acknowledged_at",
+            "image_path",
+            "video_path",
+        ]
+    )
+    for row in rows:
+        writer.writerow(
+            [
+                row.id,
+                (row.detected_at or datetime.now(timezone.utc)).isoformat(),
+                row.camera.name if row.camera else f"Камера #{row.camera_id}",
+                row.camera.location if row.camera else "",
+                row.violation_type,
+                f"{row.confidence:.4f}",
+                row.track_id or "",
+                "" if row.dwell_seconds is None else f"{row.dwell_seconds:.2f}",
+                "да" if row.is_acknowledged else "нет",
+                row.acknowledged_by or "",
+                row.acknowledged_at.isoformat() if row.acknowledged_at else "",
+                row.image_path,
+                row.video_path,
+            ]
+        )
+
+    record_audit(
+        db,
+        action="violations.export",
+        request=request,
+        user=user,
+        entity_type="violations",
+        detail={
+            "exported_rows": len(rows),
+            "violation_type": violation_type,
+            "camera_id": camera_id,
+            "unacknowledged_only": unacknowledged_only,
+        },
+    )
+
+    filename = datetime.now(timezone.utc).strftime("school_security_violations_%Y%m%d_%H%M.csv")
+    return Response(
+        content="\ufeff" + buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.patch("/violations/{violation_id}/ack", response_model=ViolationOut)

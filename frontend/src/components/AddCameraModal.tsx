@@ -53,14 +53,14 @@ export const AddCameraModal: React.FC<AddCameraModalProps> = ({ open, onClose, o
       <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-2xl">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-white">Подключение новой камеры</h3>
+            <h3 className="text-lg font-semibold text-ink">Подключение новой камеры</h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              Поддерживаются RTSP-потоки IP-камер (<code className="text-indigo-300">rtsp://...</code>), HTTP/MP4 и стенды <code className="text-indigo-300">sim://</code>
+              Поддерживаются RTSP-потоки IP-камер (<code className="text-brand-300">rtsp://...</code>), HTTP/MP4 и стенды <code className="text-brand-300">sim://</code>
             </p>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-ink hover:bg-slate-800"
           >
             <X className="w-5 h-5" />
           </button>
@@ -94,7 +94,7 @@ export const AddCameraModal: React.FC<AddCameraModalProps> = ({ open, onClose, o
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Например: Камера №4 — Гардероб"
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-indigo-500"
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-brand-500"
             />
           </div>
 
@@ -104,7 +104,7 @@ export const AddCameraModal: React.FC<AddCameraModalProps> = ({ open, onClose, o
               value={location}
               onChange={(e) => setLocation(e.target.value)}
               placeholder="1 этаж, северное крыло"
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-indigo-500"
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-brand-500"
             />
           </div>
 
@@ -115,7 +115,7 @@ export const AddCameraModal: React.FC<AddCameraModalProps> = ({ open, onClose, o
               value={rtspUrl}
               onChange={(e) => setRtspUrl(e.target.value)}
               placeholder="rtsp://admin:password@192.168.1.50:554/h264Preview_01_main"
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm font-mono focus:outline-none focus:border-indigo-500"
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm font-mono focus:outline-none focus:border-brand-500"
             />
           </div>
 

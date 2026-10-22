@@ -3,6 +3,7 @@ import { Loader2, ShieldCheck } from "lucide-react";
 import { api, DashboardStats, SystemStatus } from "./api/client";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { AppTab, Navbar } from "./components/Navbar";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { AuditPage } from "./pages/AuditPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -11,6 +12,7 @@ import { LabPage } from "./pages/LabPage";
 import { LoginPage } from "./pages/LoginPage";
 import { TrainingPage } from "./pages/TrainingPage";
 import { UsersPage } from "./pages/UsersPage";
+import { PrefsProvider, usePrefs } from "./prefs/PrefsContext";
 
 const TAB_PERMISSION: Record<AppTab, string> = {
   dashboard: "cameras:view",
@@ -24,9 +26,12 @@ const TAB_PERMISSION: Record<AppTab, string> = {
 
 const AppShell: React.FC = () => {
   const { user, can } = useAuth();
+  const { prefs } = usePrefs();
+  const navSpace = prefs.mobile_bottom_nav ? "mobile-nav-space" : "";
   const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
   const [globalStats, setGlobalStats] = useState<DashboardStats | null>(null);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const permittedTabs = useMemo(
     () => (Object.keys(TAB_PERMISSION) as AppTab[]).filter((tab) => can(TAB_PERMISSION[tab])),
@@ -58,9 +63,10 @@ const AppShell: React.FC = () => {
         permittedTabs={permittedTabs}
         unacknowledgedCount={globalStats?.unacknowledged_violations ?? 0}
         activeWeights={globalStats?.model.active_weights ?? systemStatus?.model.active_weights ?? "school_security_best.pt"}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
-      <main className="flex-1 max-w-[1500px] w-full mx-auto px-3 sm:px-6 py-5 sm:py-7">
+      <main className={`flex-1 max-w-[1500px] w-full mx-auto px-3 sm:px-6 py-4 sm:py-7 ${navSpace}`}>
         {activeTab === "dashboard" && <DashboardPage onGlobalStatsUpdate={setGlobalStats} />}
         {activeTab === "guard" && <GuardPage onGlobalStatsUpdate={setGlobalStats} />}
         {activeTab === "analytics" && <AnalyticsPage />}
@@ -70,7 +76,7 @@ const AppShell: React.FC = () => {
         {activeTab === "audit" && <AuditPage />}
       </main>
 
-      <footer className="border-t border-slate-800/80 bg-slate-950/80">
+      <footer className={`border-t border-slate-800/80 bg-slate-950/80 ${navSpace}`}>
         <div className="max-w-[1500px] mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
@@ -97,6 +103,8 @@ const AppShell: React.FC = () => {
           </div>
         </div>
       </footer>
+
+      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 };
@@ -116,7 +124,11 @@ const Gate: React.FC = () => {
   }
 
   if (!user) return <LoginPage />;
-  return <AppShell />;
+  return (
+    <PrefsProvider>
+      <AppShell />
+    </PrefsProvider>
+  );
 };
 
 export default function App() {

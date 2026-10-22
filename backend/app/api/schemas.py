@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 RoleLiteral = Literal["admin", "director", "guard"]
@@ -168,6 +168,7 @@ class ModelVersionOut(BaseModel):
     validation_notes: str = ""
     job_id: int | None = None
     source: str
+    architecture: str = "yolov8"
     size_bytes: int = 0
     sha256: str = ""
     created_by: str = "system"
@@ -228,8 +229,60 @@ class DetectorProfileOut(BaseModel):
 class ModelCatalogOut(BaseModel):
     components: list[DetectorComponentOut]
     profiles: list[DetectorProfileOut]
+    supported_architectures: list[SupportedArchitectureOut] = []
     versions: list[ModelVersionOut] = []
     production: ModelVersionOut | None = None
     active_weights: str = ""
     reloaded_at: str = ""
     hls: dict = {}
+
+
+# ─── Загрузка собственных весов YOLO ─────────────────────────────────────────
+
+class ModelUploadResult(BaseModel):
+    version: ModelVersionOut
+    inspection: dict
+    activated: bool = False
+    gate_passed: bool | None = None
+    gate_notes: str = ""
+    message: str = ""
+
+
+class SupportedArchitectureOut(BaseModel):
+    key: str
+    label: str
+
+
+# ─── Персональные настройки интерфейса ───────────────────────────────────────
+
+KPI_KEYS = ("cameras", "violations", "critical", "dwell", "latency", "confidence")
+
+
+class PreferencesIn(BaseModel):
+    """Персональные настройки интерфейса: оформление и набор KPI на дашборде."""
+
+    theme: Literal["dark", "light", "contrast"] = "dark"
+    accent: Literal["emerald", "indigo", "sky", "amber", "rose"] = "emerald"
+    kpis: list[str] = Field(default_factory=lambda: ["cameras", "violations", "dwell", "latency"])
+    compact_tables: bool = False
+    show_timeline: bool = True
+    mobile_bottom_nav: bool = True
+
+    @field_validator("kpis")
+    @classmethod
+    def _validate_kpis(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for key in value:
+            if key not in KPI_KEYS:
+                raise ValueError(
+                    "Неизвестный KPI: " + key + ". Допустимые: " + ", ".join(KPI_KEYS)
+                )
+            if key not in cleaned:
+                cleaned.append(key)
+        if not cleaned:
+            raise ValueError("Выберите хотя бы один KPI для дашборда")
+        return cleaned
+
+
+class PreferencesOut(PreferencesIn):
+    updated_at: str | None = None

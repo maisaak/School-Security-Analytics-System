@@ -85,9 +85,51 @@ export interface DetectorProfile {
   cameras: number;
 }
 
+export type ThemeName = "dark" | "light" | "contrast";
+export type AccentName = "emerald" | "indigo" | "sky" | "amber" | "rose";
+export type KpiKey = "cameras" | "violations" | "critical" | "dwell" | "latency" | "confidence";
+
+export interface Preferences {
+  theme: ThemeName;
+  accent: AccentName;
+  kpis: KpiKey[];
+  compact_tables: boolean;
+  show_timeline: boolean;
+  mobile_bottom_nav: boolean;
+  updated_at?: string | null;
+}
+
+export type PreferencesPatch = Partial<Omit<Preferences, "updated_at">>;
+
+export interface SupportedArchitecture {
+  key: string;
+  label: string;
+}
+
+export interface UploadedModelInspection {
+  architecture: string;
+  task: string;
+  classes: string[];
+  num_classes: number;
+  parameters: number;
+  ultralytics_version: string;
+  trained_at: string;
+  train_model: string;
+}
+
+export interface ModelUploadResult {
+  version: ModelVersion;
+  inspection: UploadedModelInspection;
+  activated: boolean;
+  gate_passed: boolean | null;
+  gate_notes: string;
+  message: string;
+}
+
 export interface ModelCatalog {
   components: DetectorComponent[];
   profiles: DetectorProfile[];
+  supported_architectures: SupportedArchitecture[];
   versions: ModelVersion[];
   production: ModelVersion | null;
   active_weights: string;
@@ -183,6 +225,7 @@ export interface ModelVersion {
   validation_notes: string;
   job_id: number | null;
   source: string;
+  architecture: string;
   size_bytes: number;
   sha256: string;
   created_by: string;
@@ -473,6 +516,21 @@ export const api = {
 
   deleteViolation: (id: number) => request<void>(`/violations/${id}`, { method: "DELETE" }),
 
+  violationsExportUrl: (params?: {
+    violation_type?: string;
+    camera_id?: number;
+    unacknowledged_only?: boolean;
+    limit?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.violation_type) q.set("violation_type", params.violation_type);
+    if (params?.camera_id) q.set("camera_id", String(params.camera_id));
+    if (params?.unacknowledged_only) q.set("unacknowledged_only", "true");
+    if (params?.limit) q.set("limit", String(params.limit));
+    const suffix = q.toString() ? `?${q.toString()}` : "";
+    return withToken(`/api/violations/export${suffix}`);
+  },
+
   videoDownloadUrl: (violation: { id: number }) =>
     withToken(`/api/violations/${violation.id}/video?download=true`),
 
@@ -531,6 +589,29 @@ export const api = {
 
   getModelVersions: () => request<ModelVersion[]>("/models/versions"),
 
+  uploadModel: (payload: {
+    file: File;
+    label?: string;
+    architecture?: string;
+    map50?: number | null;
+    activate?: boolean;
+    notes?: string;
+  }) => {
+    const form = new FormData();
+    form.append("file", payload.file);
+    form.append("label", payload.label ?? "");
+    form.append("architecture", payload.architecture ?? "auto");
+    if (payload.map50 !== null && payload.map50 !== undefined && !Number.isNaN(payload.map50)) {
+      form.append("map50", String(payload.map50));
+    }
+    form.append("activate", String(Boolean(payload.activate)));
+    form.append("notes", payload.notes ?? "");
+    return request<ModelUploadResult>("/models/upload", { method: "POST", body: form });
+  },
+
+  deleteModelVersion: (versionId: number) =>
+    request<void>(`/models/versions/${versionId}`, { method: "DELETE" }),
+
   getValidationGate: () => request<ValidationGateInfo>("/models/gate"),
 
   rollbackVersion: (versionId: number, reason: string, force = false) =>
@@ -538,6 +619,12 @@ export const api = {
       `/models/versions/${versionId}/rollback`,
       jsonInit("POST", { reason, force })
     ),
+
+  // ── Персональные настройки интерфейса ───────────────────────────────────
+  getPreferences: () => request<Preferences>("/settings/preferences"),
+
+  updatePreferences: (payload: PreferencesPatch) =>
+    request<Preferences>("/settings/preferences", jsonInit("PATCH", payload)),
 
   // ── Пользователи ────────────────────────────────────────────────────────
   getUsers: () => request<User[]>("/users"),

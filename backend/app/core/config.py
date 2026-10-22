@@ -39,7 +39,7 @@ def _load_or_create_jwt_secret() -> str:
 
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "School Security Analytics System"
+    PROJECT_NAME: str = "Аналитика безопасности школы"
     APP_VERSION: str = "2.1.0"
 
     DATABASE_URL: str = f"sqlite:///{(PROJECT_ROOT / 'school_security.db').as_posix()}"
@@ -74,6 +74,8 @@ class Settings(BaseSettings):
 
     MAX_UPLOAD_IMAGE_MB: int = 15
     MAX_UPLOAD_VIDEO_MB: int = 60
+    # Лимит загрузки собственных весов YOLO (.pt), МБ
+    MAX_UPLOAD_MODEL_MB: int = 200
     MAX_STORED_VIOLATIONS: int = 250
 
     YOLO_COCO_MODEL_PATH: Path = PROJECT_ROOT / "ml" / "models" / "yolov8n.pt"

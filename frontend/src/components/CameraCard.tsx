@@ -110,7 +110,7 @@ export const CameraCard: React.FC<CameraCardProps> = ({
       <div className="p-4 space-y-3">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <h3 className="font-semibold text-sm text-white truncate">{camera.name}</h3>
+            <h3 className="font-semibold text-sm text-ink truncate">{camera.name}</h3>
             <p className="text-[11px] text-slate-400 truncate mt-0.5">{camera.location}</p>
             <p className="text-[10px] text-slate-500 font-mono truncate mt-1 flex items-center gap-1">
               {camera.has_credentials && <KeyRound className="w-3 h-3 text-amber-500/80 shrink-0" />}
@@ -122,7 +122,7 @@ export const CameraCard: React.FC<CameraCardProps> = ({
                   camera.source_kind === "rtsp"
                     ? "text-sky-300 border-sky-500/30 bg-sky-500/10"
                     : camera.source_kind === "simulated"
-                    ? "text-indigo-300 border-indigo-500/30 bg-indigo-500/10"
+                    ? "text-brand-300 border-brand-500/30 bg-brand-500/10"
                     : "text-slate-300 border-slate-600/40 bg-slate-700/20"
                 }`}
               >
@@ -149,7 +149,7 @@ export const CameraCard: React.FC<CameraCardProps> = ({
                 <button
                   onClick={() => onToggle(camera.id)}
                   title={camera.is_active ? "Приостановить поток" : "Возобновить поток"}
-                  className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+                  className="p-2 rounded-lg text-slate-400 hover:text-ink hover:bg-slate-800 transition"
                 >
                   {camera.is_active ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                 </button>
@@ -191,7 +191,7 @@ export const CameraCard: React.FC<CameraCardProps> = ({
         {camera.is_simulated && camera.is_active && canSimulate && (
           <div className="pt-2.5 border-t border-slate-800/80">
             <div className="flex items-center gap-1.5 text-[10px] text-slate-400 mb-2">
-              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+              <Sparkles className="w-3.5 h-3.5 text-brand-400" />
               <span>Мгновенный тест детекции YOLOv8 в кадре:</span>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">

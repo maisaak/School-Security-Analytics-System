@@ -95,13 +95,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
   return (
     <div className="space-y-6">
       {latestAlert && (
-        <div className="bg-red-950/80 border border-red-500/50 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-lg">
+        <div className="tinted-red bg-red-950/80 border border-red-500/50 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-lg">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-xl bg-red-500/20 text-red-300">
               <AlertTriangle className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-xs sm:text-sm font-semibold text-white">
+              <p className="text-xs sm:text-sm font-semibold text-ink">
                 Новое срабатывание YOLOv8:{" "}
                 {VIOLATION_META[latestAlert.violation_type]?.title ?? latestAlert.violation_type}
               </p>
@@ -128,7 +128,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
             </button>
             <button
               onClick={() => setLatestAlert(null)}
-              className="p-2 rounded-lg text-red-300 hover:text-white"
+              className="p-2 rounded-lg text-red-300 hover:text-ink"
             >
               <X className="w-4 h-4" />
             </button>
@@ -143,7 +143,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
       <section className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-base sm:text-lg font-semibold text-white">Видеостена реального времени</h2>
+            <h2 className="text-base sm:text-lg font-semibold text-ink">Видеостена реального времени</h2>
             <p className="text-[11px] text-slate-400">
               RTSP → HLS (H.264) с детекцией поверх кадра · MJPEG-фолбэк · трекинг бесхозных предметов с таймером выдержки
             </p>
@@ -241,12 +241,12 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-5xl w-full p-3 sm:p-4 space-y-3">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="font-semibold text-white text-sm">{expandedCamera.name}</h3>
+                <h3 className="font-semibold text-ink text-sm">{expandedCamera.name}</h3>
                 <p className="text-[11px] text-slate-400">{expandedCamera.location}</p>
               </div>
               <button
                 onClick={() => setExpandedCamera(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-ink hover:bg-slate-800"
               >
                 <X className="w-5 h-5" />
               </button>

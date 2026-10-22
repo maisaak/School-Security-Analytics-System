@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -11,10 +12,12 @@ from sqlalchemy.orm import Session
 
 from app.api.schemas import (
     ModelCatalogOut,
+    ModelUploadResult,
     ModelVersionOut,
     RetrainJobOut,
     RetrainRequest,
     RollbackRequest,
+    SupportedArchitectureOut,
 )
 from app.api.serializers import serialize_job, serialize_version
 from app.core.auth import require_permissions
@@ -26,7 +29,15 @@ from app.db.session import get_db
 from app.models.detector import detector
 from app.services.audit import record_audit
 from app.services.hls import playlist_ready
-from app.services.model_registry import activate_version, current_production
+from app.services.model_registry import (
+    ARCHITECTURE_LABELS,
+    SUPPORTED_ARCHITECTURES,
+    activate_version,
+    current_production,
+    evaluate_validation_gate,
+    inspect_weights,
+    register_version,
+)
 from app.services.tasks import celery_app, execute_retrain_job, retrain_model_task
 
 router = APIRouter(prefix="/api/models", tags=["YOLOv8: дообучение и реестр версий"])
@@ -59,6 +70,10 @@ def model_catalog(
     return ModelCatalogOut(
         components=catalog["components"],
         profiles=catalog["profiles"],
+        supported_architectures=[
+            SupportedArchitectureOut(key=key, label=ARCHITECTURE_LABELS.get(key, key))
+            for key in SUPPORTED_ARCHITECTURES
+        ],
         versions=[serialize_version(v, production.id if production else None) for v in versions],
         production=serialize_version(production, production.id) if production else None,
         active_weights=catalog["active_weights"],
@@ -227,6 +242,222 @@ def retrain_model(
         ).start()
 
     return serialize_job(db.query(RetrainJob).filter(RetrainJob.id == job.id).first())
+
+
+@router.post("/upload", response_model=ModelUploadResult)
+async def upload_custom_model(
+    request: Request,
+    file: UploadFile = File(...),
+    label: str = Form(""),
+    architecture: str = Form("auto"),
+    map50: float | None = Form(None),
+    activate: bool = Form(False),
+    notes: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permissions(Permission.MODELS_TRAIN)),
+):
+    """
+    Загрузка собственных обученных весов: YOLOv8, YOLO11, YOLOv10, YOLOv9 и др.
+
+    Файл проверяется Ultralytics до записи в реестр (битые и чужие чекпоинты
+    отсекаются), архитектура и классы определяются автоматически. Если указан
+    mAP@50 и включена активация, применяется тот же Validation Gate, что и для
+    дообучения: деградация относительно боевой версии блокируется.
+    """
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".pt"):
+        raise HTTPException(
+            status_code=415,
+            detail="Поддерживаются только веса Ultralytics в формате .pt (YOLOv8 / YOLO11 / YOLOv10 / YOLOv9)",
+        )
+
+    requested_arch = (architecture or "auto").strip().lower()
+    if requested_arch not in SUPPORTED_ARCHITECTURES:
+        raise HTTPException(
+            status_code=422,
+            detail="Неизвестная архитектура. Доступны: " + ", ".join(SUPPORTED_ARCHITECTURES),
+        )
+
+    content = await read_upload_limited(
+        file, max_bytes=settings.MAX_UPLOAD_MODEL_MB * 1024 * 1024
+    )
+    if len(content) < 1024:
+        raise HTTPException(status_code=400, detail="Файл весов слишком мал и не похож на чекпоинт")
+
+    settings.MODEL_VERSIONS_ROOT.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    safe_stem = "".join(ch for ch in Path(filename).stem if ch.isalnum() or ch in "-_")[:48] or "model"
+    staged = settings.MODEL_VERSIONS_ROOT / f"upload_{stamp}_{safe_stem}.pt"
+    staged.write_bytes(content)
+
+    try:
+        inspection = inspect_weights(staged)
+    except Exception as exc:
+        staged.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Не удалось прочитать веса: {exc.__class__.__name__}. Убедитесь, что это чекпоинт Ultralytics .pt",
+        ) from exc
+
+    if inspection["task"] != "detect":
+        staged.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=422,
+            detail=f"Модель задачи '{inspection['task']}' не подходит: система работает только с детекцией объектов",
+        )
+
+    detected_arch = inspection["architecture"]
+    if requested_arch != "auto" and detected_arch not in {"custom", requested_arch}:
+        staged.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Файл содержит веса {ARCHITECTURE_LABELS.get(detected_arch, detected_arch)}, "
+                f"а выбрана {ARCHITECTURE_LABELS.get(requested_arch, requested_arch)}. "
+                "Выберите «Определить автоматически» или укажите правильную архитектуру."
+            ),
+        )
+    final_arch = detected_arch if detected_arch != "custom" else (requested_arch if requested_arch != "auto" else "custom")
+
+    if len(inspection["classes"]) < 2:
+        staged.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=422,
+            detail="Модель должна детектировать хотя бы два класса (например, weapon и suspicious_bag)",
+        )
+
+    metrics: dict[str, float] = {}
+    normalized_map50: float | None = None
+    if map50 is not None:
+        normalized_map50 = round(map50 / 100.0, 4) if map50 > 1 else round(map50, 4)
+        if not 0.0 < normalized_map50 <= 1.0:
+            staged.unlink(missing_ok=True)
+            raise HTTPException(status_code=422, detail="mAP@50 должен быть в диапазоне 0–1 или 0–100%")
+        metrics["metrics/mAP50(B)"] = normalized_map50
+
+    version_label = (label or "").strip()[:80] or f"{safe_stem}-{stamp}"
+    version = register_version(
+        db,
+        weights_path=staged,
+        metrics=metrics,
+        label=version_label,
+        source="upload",
+        created_by=user.username,
+        status="candidate",
+        baseline=None,
+        architecture=final_arch,
+    )
+    version.validation_notes = notes.strip()[:400] or (
+        f"Загружено администратором {user.username}: {filename} · "
+        f"{ARCHITECTURE_LABELS.get(final_arch, final_arch)} · классов: {len(inspection['classes'])}"
+    )
+    # Реестр уже держит собственную копию весов — временный файл загрузки не нужен
+    try:
+        staged.unlink(missing_ok=True)
+    except OSError:
+        pass
+    db.commit()
+    db.refresh(version)
+
+    activated = False
+    gate_passed: bool | None = None
+    gate_notes = ""
+    message = "Модель добавлена в реестр как кандидат"
+
+    if normalized_map50 is None:
+        message = (
+            "Модель добавлена в реестр. mAP@50 не указан — автоматический Validation Gate "
+            "недоступен, активируйте версию вручную из реестра."
+        )
+    else:
+        gate_passed, gate_notes = evaluate_validation_gate(db, version)
+        version.validation_passed = gate_passed
+        version.validation_notes = f"{version.validation_notes} · {gate_notes}"
+        if activate and gate_passed:
+            activate_version(db, version, reason=f"Активация загруженных весов ({user.username})")
+            activated = True
+            message = "Модель прошла Validation Gate и назначена боевой"
+        elif activate and not gate_passed:
+            version.status = "rejected"
+            message = "Validation Gate не пропустил модель: боевые веса не изменены"
+        elif gate_passed:
+            message = "Модель проверена Validation Gate и ожидает активации"
+        else:
+            message = (
+                "Модель добавлена в реестр как кандидат, но Validation Gate не пропустил её: "
+                "активация заблокирована, боевые веса не изменены"
+            )
+        db.commit()
+        db.refresh(version)
+
+    record_audit(
+        db,
+        action="model.upload",
+        request=request,
+        user=user,
+        entity_type="model_version",
+        entity_id=version.id,
+        detail={
+            "filename": filename,
+            "label": version.label,
+            "architecture": final_arch,
+            "detected_architecture": detected_arch,
+            "classes": inspection["classes"],
+            "map50_provided": normalized_map50,
+            "gate_passed": gate_passed,
+            "activated": activated,
+            "size_bytes": version.size_bytes,
+        },
+    )
+
+    return ModelUploadResult(
+        version=serialize_version(version, version.id if activated else None),
+        inspection=inspection,
+        activated=activated,
+        gate_passed=gate_passed,
+        gate_notes=gate_notes,
+        message=message,
+    )
+
+
+@router.delete("/versions/{version_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_model_version(
+    version_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permissions(Permission.MODELS_ROLLBACK)),
+):
+    """Удаляет загруженную версию из реестра (боевую удалить нельзя — сначала откатитесь)."""
+    version = db.query(ModelVersion).filter(ModelVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="Версия не найдена")
+    if version.status == "production":
+        raise HTTPException(status_code=409, detail="Нельзя удалить боевую версию: сначала активируйте другую")
+
+    from app.services.model_registry import abs_path
+
+    weights = abs_path(version.weights_path)
+    label = version.label
+    db.delete(version)
+    db.commit()
+    try:
+        if weights.is_file():
+            weights.unlink()
+    except OSError:
+        pass
+
+    record_audit(
+        db,
+        action="model.version.delete",
+        request=request,
+        user=user,
+        entity_type="model_version",
+        entity_id=version_id,
+        detail={"label": label},
+    )
+    from fastapi import Response
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/versions", response_model=list[ModelVersionOut])

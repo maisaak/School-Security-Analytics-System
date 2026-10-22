@@ -34,6 +34,8 @@ class User(Base):
     is_demo = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     last_login_at = Column(DateTime(timezone=True), nullable=True)
+    # Персональные настройки интерфейса (тема, KPI, плотность таблиц) в JSON
+    preferences_json = Column(Text, default="{}", nullable=False, server_default="{}")
 
 
 class Camera(Base):
@@ -116,7 +118,9 @@ class ModelVersion(Base):
     validation_passed = Column(Boolean, nullable=True)
     validation_notes = Column(Text, default="")
     job_id = Column(Integer, nullable=True, index=True)
-    source = Column(String(32), default="retrain", nullable=False)  # baseline | retrain | rollback
+    source = Column(String(32), default="retrain", nullable=False)  # baseline | retrain | rollback | upload
+    # Архитектура весов: yolov8 | yolo11 | yolo10 | yolov9 | custom
+    architecture = Column(String(32), default="yolov8", nullable=False, server_default="yolov8")
     size_bytes = Column(Integer, default=0)
     sha256 = Column(String(64), default="")
     created_by = Column(String(64), default="system")

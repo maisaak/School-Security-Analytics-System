@@ -112,7 +112,7 @@ export const LoginPage: React.FC = () => {
     <div className="min-h-screen bg-slate-950 text-slate-100 relative overflow-hidden">
       <div className="pointer-events-none absolute inset-0">
         <div className="absolute -top-40 -left-32 w-[520px] h-[520px] rounded-full bg-emerald-500/10 blur-3xl" />
-        <div className="absolute top-1/3 -right-40 w-[560px] h-[560px] rounded-full bg-indigo-500/10 blur-3xl" />
+        <div className="absolute top-1/3 -right-40 w-[560px] h-[560px] rounded-full bg-brand-500/10 blur-3xl" />
         <div
           className="absolute inset-0 opacity-[0.035]"
           style={{
@@ -130,7 +130,7 @@ export const LoginPage: React.FC = () => {
               <ShieldCheck className="w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white">
+              <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-ink">
                 School Security Analytics
               </h1>
               <p className="text-xs text-slate-400">
@@ -145,7 +145,7 @@ export const LoginPage: React.FC = () => {
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
               Контур безопасности · авторизация включена
             </span>
-            <h2 className="text-3xl sm:text-4xl font-bold text-white leading-tight">
+            <h2 className="text-3xl sm:text-4xl font-bold text-ink leading-tight">
               Единая видеостена, тревоги и аналитика школы
               <span className="block text-emerald-400 mt-1">в одном защищённом окне</span>
             </h2>
@@ -166,7 +166,7 @@ export const LoginPage: React.FC = () => {
                 className="rounded-2xl border border-slate-800 bg-slate-900/60 backdrop-blur p-3.5"
               >
                 <Icon className="w-4 h-4 text-emerald-400 mb-2" />
-                <p className="text-xs font-semibold text-white">{title}</p>
+                <p className="text-xs font-semibold text-ink">{title}</p>
                 <p className="text-[11px] text-slate-500 mt-0.5">{text}</p>
               </div>
             ))}
@@ -186,7 +186,7 @@ export const LoginPage: React.FC = () => {
           <div className="rounded-3xl border border-slate-800 bg-slate-900/80 backdrop-blur-xl shadow-2xl shadow-black/40 p-5 sm:p-6">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="text-base font-semibold text-white">Вход в систему</h3>
+                <h3 className="text-base font-semibold text-ink">Вход в систему</h3>
                 <p className="text-xs text-slate-400 mt-0.5">
                   Быстрый вход по роли или учётные данные
                 </p>
@@ -223,7 +223,7 @@ export const LoginPage: React.FC = () => {
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-semibold text-white">{account.role_label}</span>
+                          <span className="text-sm font-semibold text-ink">{account.role_label}</span>
                           <span
                             className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${meta.chip}`}
                           >

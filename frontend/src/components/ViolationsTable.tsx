@@ -1,6 +1,7 @@
 import React from "react";
-import { CheckCircle2, Clock, Hourglass, Play, ScanEye, Trash2 } from "lucide-react";
+import { CheckCircle2, Clock, Download, Hourglass, Play, ScanEye, Trash2 } from "lucide-react";
 import { api, Camera, Violation } from "../api/client";
+import { usePrefs } from "../prefs/PrefsContext";
 import { formatDateTime } from "./ui";
 
 export const VIOLATION_META: Record<
@@ -52,21 +53,38 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
   onAcknowledge,
   onDelete,
 }) => {
+  const { prefs } = usePrefs();
+  const exportUrl = api.violationsExportUrl({
+    violation_type: filterType || undefined,
+    camera_id: filterCameraId,
+    unacknowledged_only: onlyUnack,
+  });
+
   return (
     <section className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm sm:text-base font-semibold text-white">Журнал зафиксированных нарушений</h2>
+          <h2 className="text-sm sm:text-base font-semibold text-ink">Журнал зафиксированных нарушений</h2>
           <p className="text-[11px] text-slate-400">
-            Фотофиксация, H.264-клип и данные трекинга по каждому срабатыванию YOLOv8
+            Фотофиксация, H.264-клип и данные трекинга по каждому срабатыванию YOLO · показано {violations.length}
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <a
+            href={exportUrl}
+            download
+            title="Скачать выбранные записи в CSV (Excel, разделитель «;», UTF-8)"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-[11px] font-medium text-white transition"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Экспорт CSV
+          </a>
+
           <select
             value={filterType}
             onChange={(e) => onChangeType(e.target.value)}
-            className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-indigo-500"
+            className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-brand-500"
           >
             <option value="">Все типы угроз</option>
             <option value="weapon">Оружие</option>
@@ -77,7 +95,7 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
           <select
             value={filterCameraId ?? ""}
             onChange={(e) => onChangeCamera(e.target.value ? Number(e.target.value) : undefined)}
-            className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-indigo-500 max-w-[190px]"
+            className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-brand-500 max-w-[190px]"
           >
             <option value="">Все камеры</option>
             {cameras.map((cam) => (
@@ -92,7 +110,7 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
               type="checkbox"
               checked={onlyUnack}
               onChange={(e) => onChangeUnack(e.target.checked)}
-              className="rounded accent-indigo-500"
+              className="rounded accent-brand-500"
             />
             Неподтверждённые
           </label>
@@ -100,7 +118,7 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full text-sm text-left">
+        <table className={`w-full text-sm text-left ${prefs.compact_tables ? "compact-table" : ""}`}>
           <thead className="text-[10px] uppercase tracking-wider text-slate-400 border-b border-slate-800">
             <tr>
               <th className="py-3 px-2">Кадр</th>
@@ -128,7 +146,7 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
                     <td className="py-3 px-2">
                       <button
                         onClick={() => onOpenVideo(v)}
-                        className="relative group block rounded-lg overflow-hidden border border-slate-700 w-24 h-14 bg-black shrink-0"
+                        className="compact-thumb relative group block rounded-lg overflow-hidden border border-slate-700 w-24 h-14 bg-black shrink-0"
                       >
                         <img
                           src={api.mediaUrl(v.image_path)}
@@ -137,7 +155,7 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
                           className="w-full h-full object-cover group-hover:scale-105 transition"
                         />
                         <span className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
-                          <Play className="w-4 h-4 text-white fill-white" />
+                          <Play className="w-4 h-4 text-ink fill-white" />
                         </span>
                       </button>
                     </td>
@@ -149,14 +167,14 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
                       </span>
                     </td>
                     <td className="py-3 px-2">
-                      <div className="font-medium text-white text-[11px] sm:text-xs">{v.camera_name}</div>
+                      <div className="font-medium text-ink text-[11px] sm:text-xs">{v.camera_name}</div>
                       <div className="text-[10px] text-slate-400">{v.camera_location}</div>
                     </td>
                     <td className="py-3 px-2">
                       <div className="flex items-center gap-1.5">
                         <div className="w-12 h-1.5 rounded-full bg-slate-800 overflow-hidden">
                           <div
-                            className="h-full bg-indigo-500"
+                            className="h-full bg-brand-500"
                             style={{ width: `${Math.min(100, v.confidence * 100)}%` }}
                           />
                         </div>
@@ -232,7 +250,7 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
                       <div className="inline-flex items-center gap-1.5">
                         <button
                           onClick={() => onOpenVideo(v)}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-medium transition"
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-[10px] font-medium transition"
                         >
                           <Play className="w-3 h-3" />
                           Видео

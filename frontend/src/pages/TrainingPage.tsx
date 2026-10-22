@@ -5,6 +5,7 @@ import {
   BrainCircuit,
   CheckCircle2,
   Database,
+  FileUp,
   GitBranch,
   History,
   Layers,
@@ -13,6 +14,7 @@ import {
   RotateCcw,
   ShieldCheck,
   Cpu,
+  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -23,6 +25,7 @@ import {
   ModelCatalog,
   ModelVersion,
   RetrainJob,
+  ModelUploadResult,
   ValidationGateInfo,
   ViolationType,
 } from "../api/client";
@@ -57,6 +60,17 @@ export const TrainingPage: React.FC = () => {
   const [rollbackForce, setRollbackForce] = useState(false);
   const [rollingBack, setRollingBack] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // Загрузка собственных весов (YOLO11 и другие семейства)
+  const [weightFile, setWeightFile] = useState<File | null>(null);
+  const [weightLabel, setWeightLabel] = useState("");
+  const [weightArchitecture, setWeightArchitecture] = useState("auto");
+  const [weightMap50, setWeightMap50] = useState("");
+  const [weightActivate, setWeightActivate] = useState(false);
+  const [weightNotes, setWeightNotes] = useState("");
+  const [uploadingWeights, setUploadingWeights] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadResult, setUploadResult] = useState<ModelUploadResult | null>(null);
 
   const canTrain = can("models:train");
   const canRollback = can("models:rollback");
@@ -135,15 +149,61 @@ export const TrainingPage: React.FC = () => {
     }
   };
 
+  const handleWeightsUpload = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!weightFile) {
+      setUploadError("Выберите файл весов .pt");
+      return;
+    }
+    setUploadingWeights(true);
+    setUploadError(null);
+    setUploadResult(null);
+    try {
+      const result = await api.uploadModel({
+        file: weightFile,
+        label: weightLabel,
+        architecture: weightArchitecture,
+        map50: weightMap50.trim() === "" ? null : Number(weightMap50),
+        activate: weightActivate,
+        notes: weightNotes,
+      });
+      setUploadResult(result);
+      setWeightFile(null);
+      setWeightLabel("");
+      setWeightNotes("");
+      setWeightMap50("");
+      setWeightActivate(false);
+      await loadState();
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Не удалось загрузить веса");
+    } finally {
+      setUploadingWeights(false);
+    }
+  };
+
+  const handleDeleteVersion = async (version: ModelVersion) => {
+    if (!window.confirm(`Удалить версию «${version.label}» из реестра? Файл весов будет удалён безвозвратно.`)) {
+      return;
+    }
+    try {
+      await api.deleteModelVersion(version.id);
+      setNotice(`Версия «${version.label}» удалена из реестра`);
+      await loadState();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось удалить версию");
+    }
+  };
+
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-          <BrainCircuit className="w-5 h-5 text-indigo-400" />
-          Дообучение YOLOv8 и реестр версий весов
+        <h2 className="text-lg font-semibold text-ink flex items-center gap-2">
+          <BrainCircuit className="w-5 h-5 text-brand-400" />
+          Модели YOLO: дообучение, загрузка весов и реестр версий
         </h2>
         <p className="text-[11px] text-slate-400">
-          Validation Gate не пропускает в production версии с падением mAP@50 · доступен откат на любую версию реестра
+          Подключите YOLO11 (или другую архитектуру) загрузкой .pt · Validation Gate не пропускает в production версии
+          с падением mAP@50 · доступен откат на любую версию реестра
         </p>
       </div>
 
@@ -161,7 +221,7 @@ export const TrainingPage: React.FC = () => {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                <span className="text-xs font-semibold text-white">Validation Gate активен</span>
+                <span className="text-xs font-semibold text-ink">Validation Gate активен</span>
               </div>
               <Pill tone="emerald">
                 допуск mAP@50 ≥ baseline − {(gate.tolerance * 100).toFixed(1)} п.п.
@@ -174,7 +234,7 @@ export const TrainingPage: React.FC = () => {
               </div>
               <div>
                 <p className="text-slate-500">mAP@50</p>
-                <p className="font-mono text-white">
+                <p className="font-mono text-ink">
                   {gate.production?.map50 !== null && gate.production?.map50 !== undefined
                     ? `${(gate.production.map50 * 100).toFixed(2)}%`
                     : "—"}
@@ -235,7 +295,7 @@ export const TrainingPage: React.FC = () => {
               ].map((item) => (
                 <div key={item.label} className="rounded-xl bg-slate-950/70 border border-slate-800/80 p-2.5">
                   <p className="text-[9px] text-slate-500">{item.label}</p>
-                  <p className="text-lg font-bold text-white">{item.value}</p>
+                  <p className="text-lg font-bold text-ink">{item.value}</p>
                 </div>
               ))}
             </div>
@@ -259,13 +319,13 @@ export const TrainingPage: React.FC = () => {
                       max={100}
                       value={epochs}
                       onChange={(e) => setEpochs(Number(e.target.value))}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs focus:outline-none focus:border-indigo-500"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs focus:outline-none focus:border-brand-500"
                     />
                   </div>
                   <button
                     type="submit"
                     disabled={Boolean(activeJob) || starting}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-xs font-medium text-white transition"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-xs font-medium text-white transition"
                   >
                     {starting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
                     {activeJob ? `Задача #${activeJob.id} выполняется` : "Запустить дообучение"}
@@ -276,14 +336,14 @@ export const TrainingPage: React.FC = () => {
                   <select
                     value={sampleClass}
                     onChange={(e) => setSampleClass(e.target.value as ViolationType)}
-                    className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-[11px] text-slate-200 focus:outline-none focus:border-indigo-500"
+                    className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-[11px] text-slate-200 focus:outline-none focus:border-brand-500"
                   >
                     <option value="suspicious_bag">Класс 2 — Бесхозная сумка</option>
                     <option value="weapon">Класс 1 — Оружие</option>
                     <option value="dog">Класс 0 — Собака</option>
                   </select>
-                  <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-dashed border-slate-700 hover:border-indigo-500 bg-slate-950/60 text-[11px] font-medium text-slate-200 cursor-pointer transition">
-                    <Upload className="w-3.5 h-3.5 text-indigo-400" />
+                  <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-dashed border-slate-700 hover:border-brand-500 bg-slate-950/60 text-[11px] font-medium text-slate-200 cursor-pointer transition">
+                    <Upload className="w-3.5 h-3.5 text-brand-400" />
                     Добавить размеченный снимок
                     <input
                       type="file"
@@ -304,28 +364,196 @@ export const TrainingPage: React.FC = () => {
             )}
 
             {uploadStatus && (
-              <div className="mt-3 p-2.5 rounded-xl bg-emerald-950/60 border border-emerald-700/50 text-[11px] text-emerald-200 flex items-center gap-2">
+              <div className="tinted-green mt-3 p-2.5 rounded-xl bg-emerald-950/60 border border-emerald-700/50 text-[11px] text-emerald-200 flex items-center gap-2">
                 <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
                 {uploadStatus}
               </div>
             )}
 
             {activeJob && (
-              <div className="mt-4 rounded-xl border border-indigo-500/30 bg-indigo-500/[0.07] p-3">
+              <div className="mt-4 rounded-xl border border-brand-500/30 bg-brand-500/[0.07] p-3">
                 <div className="flex items-center justify-between text-[11px] mb-2">
-                  <span className="text-indigo-200">
+                  <span className="text-brand-200">
                     Задача #{activeJob.id} · эпоха {activeJob.current_epoch}/{activeJob.epochs}
                   </span>
-                  <span className="font-mono text-indigo-300">{activeJob.progress_pct}%</span>
+                  <span className="font-mono text-brand-300">{activeJob.progress_pct}%</span>
                 </div>
                 <div className="h-2 rounded-full bg-slate-950 overflow-hidden">
                   <div
-                    className="h-full bg-gradient-to-r from-indigo-500 to-sky-400 transition-all duration-500"
+                    className="h-full bg-gradient-to-r from-brand-500 to-sky-400 transition-all duration-500"
                     style={{ width: `${activeJob.progress_pct}%` }}
                   />
                 </div>
                 <p className="text-[10px] text-slate-400 mt-2">{activeJob.details}</p>
               </div>
+            )}
+          </SectionCard>
+
+          <SectionCard
+            title="Загрузить свои веса (YOLO11 и др.)"
+            subtitle="Чекпоинт Ultralytics .pt: архитектура, задача и классы определяются автоматически"
+            icon={FileUp}
+          >
+            {canTrain ? (
+              <form onSubmit={handleWeightsUpload} className="space-y-3">
+                <label className="flex items-center gap-3 rounded-xl border border-dashed border-slate-700 hover:border-brand-500 bg-slate-950/60 px-3 py-3 cursor-pointer transition">
+                  <FileUp className="w-5 h-5 text-brand-400 shrink-0" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[11px] font-medium text-ink truncate">
+                      {weightFile ? weightFile.name : "Выберите файл весов .pt"}
+                    </span>
+                    <span className="block text-[10px] text-slate-500">
+                      {weightFile
+                        ? `${(weightFile.size / 1024 / 1024).toFixed(1)} МБ · готов к проверке`
+                        : "YOLOv8 / YOLO11 / YOLOv10 / YOLOv9, до 200 МБ"}
+                    </span>
+                  </span>
+                  <input
+                    type="file"
+                    accept=".pt"
+                    className="hidden"
+                    onChange={(event) => {
+                      setWeightFile(event.target.files?.[0] ?? null);
+                      setUploadResult(null);
+                      setUploadError(null);
+                    }}
+                  />
+                </label>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-400 mb-1">Название версии</label>
+                    <input
+                      value={weightLabel}
+                      onChange={(event) => setWeightLabel(event.target.value)}
+                      maxLength={80}
+                      placeholder="Например, YOLO11s шлемы и оружие"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs focus:outline-none focus:border-brand-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400 mb-1">Архитектура</label>
+                    <select
+                      value={weightArchitecture}
+                      onChange={(event) => setWeightArchitecture(event.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-brand-500"
+                    >
+                      {(catalog?.supported_architectures?.length
+                        ? catalog.supported_architectures
+                        : [
+                            { key: "auto", label: "Определить автоматически" },
+                            { key: "yolov8", label: "YOLOv8" },
+                            { key: "yolo11", label: "YOLO11" },
+                            { key: "yolo10", label: "YOLOv10" },
+                            { key: "yolo9", label: "YOLOv9" },
+                            { key: "custom", label: "Своя архитектура" },
+                          ]
+                      ).map((item) => (
+                        <option key={item.key} value={item.key}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-400 mb-1">
+                      mAP@50 на валидации, % (необязательно)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={0.1}
+                      value={weightMap50}
+                      onChange={(event) => setWeightMap50(event.target.value)}
+                      placeholder="например, 91.5"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs focus:outline-none focus:border-brand-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400 mb-1">Комментарий</label>
+                    <input
+                      value={weightNotes}
+                      onChange={(event) => setWeightNotes(event.target.value)}
+                      maxLength={240}
+                      placeholder="Датасет, автор, особенности обучения"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs focus:outline-none focus:border-brand-500"
+                    />
+                  </div>
+                </div>
+
+                <label className="flex items-start gap-2 text-[10px] text-slate-400 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={weightActivate}
+                    onChange={(event) => setWeightActivate(event.target.checked)}
+                    className="mt-0.5 rounded accent-emerald-500"
+                  />
+                  <span>
+                    Сделать боевой сразу после проверки Validation Gate.
+                    {Number(weightMap50) > 0
+                      ? " При деградации mAP@50 активация будет заблокирована."
+                      : " Без mAP@50 активация недоступна — версия останется кандидатом."}
+                  </span>
+                </label>
+
+                <button
+                  type="submit"
+                  disabled={uploadingWeights || !weightFile}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-xs font-medium text-white transition"
+                >
+                  {uploadingWeights ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Upload className="w-3.5 h-3.5" />
+                  )}
+                  {uploadingWeights ? "Проверяем веса…" : "Загрузить и проверить"}
+                </button>
+
+                {uploadError && (
+                  <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-[10px] text-red-200">
+                    {uploadError}
+                  </div>
+                )}
+
+                {uploadResult && (
+                  <div
+                    className={`rounded-xl border px-3 py-2.5 space-y-1 ${
+                      uploadResult.gate_passed === false
+                        ? "border-amber-500/40 bg-amber-500/10"
+                        : "border-emerald-500/40 bg-emerald-500/10"
+                    }`}
+                  >
+                    <p className="text-[11px] font-medium text-ink flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
+                      {uploadResult.message}
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      {uploadResult.inspection.architecture.toUpperCase()} · классов:{" "}
+                      {uploadResult.inspection.num_classes} (
+                      {uploadResult.inspection.classes.slice(0, 6).join(", ")}
+                      {uploadResult.inspection.classes.length > 6 ? "…" : ""}) · версия №
+                      {uploadResult.version.id}
+                    </p>
+                    {uploadResult.gate_notes && (
+                      <p
+                        className={`text-[10px] ${
+                          uploadResult.gate_passed === false ? "text-amber-200" : "text-slate-400"
+                        }`}
+                      >
+                        {uploadResult.gate_notes}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </form>
+            ) : (
+              <p className="text-[11px] text-slate-500 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                Загрузка и удаление весов доступны только администратору.
+              </p>
             )}
           </SectionCard>
 
@@ -412,10 +640,11 @@ export const TrainingPage: React.FC = () => {
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="text-[11px] font-semibold text-white font-mono truncate">
+                          <span className="text-[11px] font-semibold text-ink font-mono truncate">
                             {version.label}
                           </span>
                           <Pill tone={meta.tone}>{meta.label}</Pill>
+                          <Pill tone="slate">{version.architecture?.toUpperCase() ?? "YOLOV8"}</Pill>
                           {isCurrent && (
                             <Pill tone="emerald">
                               <ShieldCheck className="w-2.5 h-2.5" /> активна
@@ -427,16 +656,25 @@ export const TrainingPage: React.FC = () => {
                         </p>
                       </div>
                       {canRollback && !isCurrent && (
-                        <button
-                          onClick={() => {
-                            setRollbackTarget(version);
-                            setRollbackForce(version.validation_passed === false);
-                          }}
-                          className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 hover:bg-indigo-600 text-[10px] font-medium text-slate-200 hover:text-white transition"
-                          title="Откатиться на эту версию"
-                        >
-                          <RotateCcw className="w-3 h-3" /> Откат
-                        </button>
+                        <div className="shrink-0 flex items-center gap-1">
+                          <button
+                            onClick={() => {
+                              setRollbackTarget(version);
+                              setRollbackForce(version.validation_passed === false);
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 hover:bg-brand-600 text-[10px] font-medium text-slate-200 hover:text-white transition"
+                            title="Откатиться на эту версию"
+                          >
+                            <RotateCcw className="w-3 h-3" /> Откат
+                          </button>
+                          <button
+                            onClick={() => handleDeleteVersion(version)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-red-300 hover:bg-red-500/10 transition"
+                            title="Удалить версию из реестра"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       )}
                     </div>
 
@@ -502,8 +740,8 @@ export const TrainingPage: React.FC = () => {
           >
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-sm font-semibold text-white flex items-center gap-1.5">
-                  <ArrowDownToLine className="w-4 h-4 text-indigo-400" />
+                <h3 className="text-sm font-semibold text-ink flex items-center gap-1.5">
+                  <ArrowDownToLine className="w-4 h-4 text-brand-400" />
                   Откат на версию {rollbackTarget.label}
                 </h3>
                 <p className="text-[11px] text-slate-400 mt-0.5">
@@ -514,7 +752,7 @@ export const TrainingPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setRollbackTarget(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                className="p-1 rounded-lg text-slate-400 hover:text-ink hover:bg-slate-800"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -535,7 +773,7 @@ export const TrainingPage: React.FC = () => {
                 rows={2}
                 required
                 maxLength={240}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs focus:outline-none focus:border-indigo-500 resize-none"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs focus:outline-none focus:border-brand-500 resize-none"
               />
             </div>
 
@@ -562,7 +800,7 @@ export const TrainingPage: React.FC = () => {
               <button
                 type="submit"
                 disabled={rollingBack || (rollbackTarget.validation_passed === false && !rollbackForce)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-xs font-medium text-white transition"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-xs font-medium text-white transition"
               >
                 {rollingBack ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
                 Выполнить откат

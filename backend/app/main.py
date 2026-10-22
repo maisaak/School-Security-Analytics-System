@@ -7,7 +7,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from app.api import admin_routes, auth_routes, media_routes, model_routes, routes
+from app.api import admin_routes, auth_routes, media_routes, model_routes, routes, settings_routes
 from app.core.config import settings
 from app.core.security import hash_password, verify_api_key
 from app.db.models import Camera, ModelVersion, RetrainJob, User
@@ -169,6 +169,7 @@ async def security_headers(request: Request, call_next):
 app.include_router(auth_routes.router, dependencies=[Depends(verify_api_key)])
 app.include_router(routes.router, dependencies=[Depends(verify_api_key)])
 app.include_router(model_routes.router, dependencies=[Depends(verify_api_key)])
+app.include_router(settings_routes.router, dependencies=[Depends(verify_api_key)])
 app.include_router(admin_routes.router, dependencies=[Depends(verify_api_key)])
 app.include_router(media_routes.router)
 

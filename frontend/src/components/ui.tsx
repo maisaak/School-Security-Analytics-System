@@ -14,8 +14,8 @@ export const SectionCard: React.FC<{
       <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
         <div className="min-w-0">
           {title && (
-            <h2 className="text-sm sm:text-base font-semibold text-white flex items-center gap-2">
-              {Icon && <Icon className="w-4 h-4 text-indigo-400" />}
+            <h2 className="text-sm sm:text-base font-semibold text-ink flex items-center gap-2">
+              {Icon && <Icon className="w-4 h-4 text-brand-400" />}
               {title}
             </h2>
           )}
@@ -38,7 +38,7 @@ export const Pill: React.FC<{
     amber: "bg-amber-500/15 text-amber-300 border-amber-500/35",
     red: "bg-red-500/15 text-red-300 border-red-500/35",
     sky: "bg-sky-500/15 text-sky-300 border-sky-500/35",
-    indigo: "bg-indigo-500/15 text-indigo-300 border-indigo-500/35",
+    indigo: "bg-brand-500/15 text-brand-300 border-brand-500/35",
     slate: "bg-slate-800/80 text-slate-300 border-slate-700",
   };
   return (
@@ -52,7 +52,7 @@ export const Pill: React.FC<{
 
 export const Spinner: React.FC<{ label?: string }> = ({ label }) => (
   <div className="flex flex-col items-center justify-center gap-3 py-10 text-slate-500">
-    <Loader2 className="w-6 h-6 animate-spin text-indigo-400" />
+    <Loader2 className="w-6 h-6 animate-spin text-brand-400" />
     {label && <p className="text-xs">{label}</p>}
   </div>
 );

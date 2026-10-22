@@ -36,6 +36,77 @@ def sha256_of(path: Path) -> str:
     return digest.hexdigest()
 
 
+SUPPORTED_ARCHITECTURES: tuple[str, ...] = ("auto", "yolov8", "yolo11", "yolo10", "yolo9", "custom")
+
+ARCHITECTURE_LABELS: dict[str, str] = {
+    "auto": "Определить автоматически",
+    "yolov8": "YOLOv8",
+    "yolo11": "YOLO11",
+    "yolo10": "YOLOv10",
+    "yolo9": "YOLOv9",
+    "custom": "Своя архитектура",
+}
+
+
+def detect_architecture(model) -> str:
+    """
+    Определяет семейство весов по метаданным чекпоинта Ultralytics.
+
+    Смотрим на имя базовой модели в train_args (например, yolov8n.pt или
+    yolo11s.pt) и на yaml_file внутри модели. Если признаков нет — custom.
+    """
+    candidates: list[str] = []
+    ckpt = getattr(model, "ckpt", None) or {}
+    train_args = ckpt.get("train_args") or {}
+    if isinstance(train_args, dict):
+        candidates.append(str(train_args.get("model") or ""))
+    model_yaml = getattr(getattr(model, "model", None), "yaml", None) or {}
+    if isinstance(model_yaml, dict):
+        candidates.append(str(model_yaml.get("yaml_file") or ""))
+
+    for raw in candidates:
+        name = Path(raw).name.lower()
+        for family in ("yolo11", "yolov10", "yolov9", "yolov8", "yolov5"):
+            if name.startswith(family) or f"/{family}" in raw.lower():
+                normalized = {"yolov10": "yolo10", "yolov9": "yolo9"}.get(family, family)
+                return normalized
+    return "custom"
+
+
+def inspect_weights(path: Path) -> dict:
+    """
+    Проверяет, что файл действительно является детектором Ultralytics, и
+    возвращает метаданные для реестра. Заодно отсекает битые файлы до записи в БД.
+    """
+    from ultralytics import YOLO
+
+    model = YOLO(str(path))
+    names = model.names or {}
+    if isinstance(names, dict):
+        classes = [str(names[k]) for k in sorted(names)]
+    else:
+        classes = [str(n) for n in names]
+
+    ckpt = getattr(model, "ckpt", None) or {}
+    train_args = ckpt.get("train_args") or {}
+    params = 0
+    try:
+        params = int(sum(p.numel() for p in model.model.parameters()))
+    except Exception:
+        params = 0
+
+    return {
+        "architecture": detect_architecture(model),
+        "task": str(getattr(model, "task", "detect")),
+        "classes": classes,
+        "num_classes": len(classes),
+        "parameters": params,
+        "ultralytics_version": str(ckpt.get("version") or ""),
+        "trained_at": str(ckpt.get("date") or ""),
+        "train_model": str(train_args.get("model") or "") if isinstance(train_args, dict) else "",
+    }
+
+
 def _clean_metrics(metrics: dict | None) -> dict[str, float]:
     cleaned: dict[str, float] = {}
     for key, value in (metrics or {}).items():
@@ -95,6 +166,7 @@ def register_version(
     validation_passed: bool | None = None,
     validation_notes: str = "",
     baseline: float | None = None,
+    architecture: str = "yolov8",
 ) -> ModelVersion:
     """Кладёт копию весов в реестр версий и регистрирует её в БД (без активации)."""
     weights_path = weights_path.resolve()
@@ -125,6 +197,7 @@ def register_version(
         validation_notes=validation_notes,
         job_id=job_id,
         source=source,
+        architecture=architecture or "yolov8",
         size_bytes=target.stat().st_size,
         sha256=sha256_of(target),
         created_by=created_by,
@@ -263,6 +336,11 @@ def process_retrain_result(
     регистрация кандидата -> проверка mAP@50 -> promotion либо отказ с сохранением прежних весов.
     """
     baseline = baseline_map50(db)
+    architecture = "yolov8"
+    try:
+        architecture = inspect_weights(Path(staged_weights))["architecture"]
+    except Exception:
+        logger.warning("Не удалось определить архитектуру весов %s", staged_weights)
     candidate = register_version(
         db,
         weights_path=staged_weights,
@@ -273,6 +351,7 @@ def process_retrain_result(
         created_by=created_by,
         status="candidate",
         baseline=baseline,
+        architecture=architecture,
     )
     passed, notes = evaluate_validation_gate(db, candidate)
     candidate.validation_passed = passed
