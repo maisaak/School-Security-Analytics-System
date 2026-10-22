@@ -72,7 +72,7 @@ export const CameraCard: React.FC<CameraCardProps> = ({
           </span>
 
           {tracked && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-semibold backdrop-blur-md bg-amber-500/90 text-slate-950">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-semibold backdrop-blur-md bg-amber-500/90 text-black">
               <Hourglass className="w-3 h-3" />
               {tracked.track_id} · {tracked.dwell_seconds.toFixed(1)} / {dwellThreshold.toFixed(0)} с
             </span>

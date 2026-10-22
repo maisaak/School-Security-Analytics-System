@@ -293,7 +293,7 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
                           <Play className="w-4 h-4 text-ink fill-white" />
                         </span>
                         {v.is_false_alarm && (
-                          <span className="absolute top-0.5 left-0.5 px-1 py-0.5 rounded bg-amber-500/90 text-[8px] font-bold text-slate-950">
+                          <span className="absolute top-0.5 left-0.5 px-1 py-0.5 rounded bg-amber-500/90 text-[8px] font-bold text-black">
                             ЛОЖНОЕ
                           </span>
                         )}

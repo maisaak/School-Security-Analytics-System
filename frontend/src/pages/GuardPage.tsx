@@ -291,7 +291,7 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
                       .map((t) => (
                         <span
                           key={t.track_id}
-                          className="px-2 py-0.5 rounded text-[10px] font-semibold backdrop-blur-md bg-amber-500/90 text-slate-950 flex items-center gap-1"
+                          className="px-2 py-0.5 rounded text-[10px] font-semibold backdrop-blur-md bg-amber-500/90 text-black flex items-center gap-1"
                         >
                           <Hourglass className="w-3 h-3" />
                           {t.dwell_seconds.toFixed(1)} с

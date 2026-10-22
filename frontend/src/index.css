@@ -475,6 +475,7 @@ html[data-theme="light"] .segment-active {
 
 @media (prefers-reduced-motion: reduce) {
   .fade-up { animation: none; }
+  .chip-live::before { animation: none; }
 }
 
 /* Скелетон загрузки */
@@ -499,7 +500,6 @@ html[data-theme="light"] .segment-active {
 :where(button, a, input, select, textarea, [tabindex]):focus-visible {
   outline: 2px solid rgb(var(--accent-400) / 0.75);
   outline-offset: 2px;
-  border-radius: 0.5rem;
 }
 
 ::selection {

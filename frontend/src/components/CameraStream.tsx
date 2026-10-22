@@ -182,7 +182,7 @@ export const CameraStream: React.FC<CameraStreamProps> = ({
       )}
 
       {status === "fallback" && (
-        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-md bg-amber-500/90 px-2 py-1 text-[10px] font-medium text-slate-950">
+        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-md bg-amber-500/90 px-2 py-1 text-[10px] font-medium text-black">
           HLS недоступен — включён MJPEG
         </div>
       )}
