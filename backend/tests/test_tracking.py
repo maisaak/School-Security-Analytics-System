@@ -96,3 +96,23 @@ def test_tracker_forgets_stale_tracks():
     assert len(tracker.tracks) == 1
     tracker.update([], now=5.0)
     assert tracker.tracks == {}
+
+
+def test_confirmed_alarm_survives_brief_detection_gap():
+    """Статус подтверждённой тревоги удерживается, пока предмет не пропал дольше grace-окна."""
+    monitor = BagDwellMonitor(dwell_sec=1.0, distance_ratio=0.2, release_grace_sec=1.5)
+    t = 0.0
+    result = {"violations": []}
+    for _ in range(8):  # 1.6 с — тревога подтверждена
+        result = monitor.update([_bag()], [], FRAME_SHAPE, t)
+        t += 0.2
+    assert result["violations"], "Тревога должна быть подтверждена"
+
+    # Кадр без детекции (например, предмет перекрыт) — тревога не гаснет мгновенно
+    gap = monitor.update([], [], FRAME_SHAPE, t)
+    assert gap["states"][0]["state"] == "unattended"
+    assert gap["violations"], "Короткий пропуск детекции не должен гасить подтверждённую тревогу"
+
+    # Долгое отсутствие предмета (> grace) — трек забывается, тревога снимается
+    later = monitor.update([], [], FRAME_SHAPE, t + 5.0)
+    assert later["violations"] == []

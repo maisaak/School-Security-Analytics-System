@@ -186,8 +186,12 @@ class BagDwellMonitor:
 
         for track in sorted(self.tracker.tracks.values(), key=lambda t: t.track_id):
             if not track.observed:
-                # объект временно потерян: таймер не тикает, состояние удерживается
+                # Объект временно потерян: таймер не тикает, состояние удерживается.
+                # Если тревога уже была подтверждена — держим её в пределах grace-окна,
+                # чтобы короткое перекрытие кадра не «мигало» на видеостене.
                 states.append(self._state_payload(track, settled=True))
+                if track.confirmed and (now - track.last_seen) <= self.release_grace_sec:
+                    violations.append(self._violation_payload(track))
                 continue
 
             cx, cy = center(track.bbox)
@@ -220,21 +224,25 @@ class BagDwellMonitor:
 
             states.append(self._state_payload(track))
 
-            if track.confirmed and track.observed:
-                violations.append(
-                    {
-                        "type": "suspicious_bag",
-                        "confidence": round(track.confidence, 4),
-                        "bbox": list(track.bbox),
-                        "track_id": f"BAG-{track.track_id}",
-                        "dwell_seconds": track.dwell_seconds,
-                    }
-                )
+            # Статус тревоги удерживается во времени: короткий пропуск детекции
+            # в пределах grace-окна не гасит уже подтверждённую тревогу.
+            if track.confirmed:
+                violations.append(self._violation_payload(track))
 
         return {
             "states": states,
             "violations": violations,
             "threshold_sec": self.dwell_sec,
+        }
+
+    @staticmethod
+    def _violation_payload(track: Track) -> dict:
+        return {
+            "type": "suspicious_bag",
+            "confidence": round(track.confidence, 4),
+            "bbox": list(track.bbox),
+            "track_id": f"BAG-{track.track_id}",
+            "dwell_seconds": track.dwell_seconds,
         }
 
     @staticmethod
