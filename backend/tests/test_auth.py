@@ -55,7 +55,8 @@ def test_login_sets_httponly_cookie_and_returns_permissions(client):
     assert me.json()["username"] == settings.DEMO_ADMIN_USERNAME
 
 
-def test_cookie_auth_works_for_binary_endpoints_and_bearer_for_api(client, tokens, first_camera):
+def test_cookie_auth_works_for_binary_endpoints_and_bearer_for_api(client, tokens, warm_camera):
+    first_camera = warm_camera
     """Теги <img>/<video> браузера авторизуются HttpOnly cookie, API-клиенты — Bearer-токеном."""
     probe = TestClient(app)
     login = probe.post(
@@ -72,6 +73,12 @@ def test_cookie_auth_works_for_binary_endpoints_and_bearer_for_api(client, token
 
     # MJPEG-поток защищён так же, как и остальные камерные эндпоинты
     assert client.get(f"/api/cameras/{first_camera['id']}/stream").status_code == 401
+
+    # ...и реально отдаётся с cookie (регрессия: кириллица в заголовке ломала стрим)
+    with probe.stream("GET", f"/api/cameras/{first_camera['id']}/stream") as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("multipart/x-mixed-replace")
+        assert "x-camera-name" in response.headers
 
     bearer = client.get("/api/auth/me", headers={"Authorization": f"Bearer {tokens['guard']}"})
     assert bearer.status_code == 200
@@ -149,3 +156,48 @@ def test_permission_matrix():
     assert has_permission(Role.GUARD, Permission.MEDIA_CHECK)
     assert not has_permission(Role.GUARD, Permission.AUDIT_VIEW)
     assert not has_permission(Role.GUARD, Permission.ANALYTICS_VIEW)
+
+
+def test_bearer_token_fallback_without_cookies(client, warm_camera):
+    first_camera = warm_camera
+    """
+    Регрессия для iframe-превью: браузер блокирует сторонние cookie,
+    поэтому фронтенд дублирует JWT в Authorization и ?token= для медиа-тегов.
+    """
+    probe = TestClient(app)
+    session = probe.post(
+        "/api/auth/login",
+        json={"username": settings.DEMO_GUARD_USERNAME, "password": settings.DEMO_GUARD_PASSWORD},
+    )
+    assert session.status_code == 200
+    token = session.json().get("access_token")
+    assert token, "Токен должен возвращаться в теле логина для fallback-режима"
+
+    fresh = TestClient(app)  # чистый клиент без cookie
+    headers = {"Authorization": f"Bearer {token}"}
+    assert fresh.get("/api/auth/me", headers=headers).status_code == 200
+    assert fresh.get("/api/cameras", headers=headers).status_code == 200
+    assert fresh.get("/api/stats", headers=headers).status_code == 200
+    assert fresh.get("/api/violations", headers=headers).status_code == 200
+
+    snapshot = fresh.get(f"/api/cameras/{first_camera['id']}/snapshot?token={token}")
+    assert snapshot.status_code == 200
+    assert snapshot.headers["content-type"] == "image/jpeg"
+
+    with fresh.stream("GET", f"/api/cameras/{first_camera['id']}/stream?token={token}") as stream:
+        assert stream.status_code == 200
+        assert stream.headers["content-type"].startswith("multipart/x-mixed-replace")
+
+    assert fresh.get(f"/api/cameras/{first_camera['id']}/snapshot").status_code == 401
+
+
+def test_auth_session_reports_httponly_cookie_and_token(client):
+    response = client.post(
+        "/api/auth/login",
+        json={"username": settings.DEMO_DIRECTOR_USERNAME, "password": settings.DEMO_DIRECTOR_PASSWORD},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["token_type"] == "cookie"
+    assert payload["access_token"]
+    assert "httponly" in response.headers.get("set-cookie", "").lower()

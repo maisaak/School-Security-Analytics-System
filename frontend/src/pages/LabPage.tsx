@@ -105,7 +105,7 @@ export const LabPage: React.FC = () => {
             <div className="rounded-xl overflow-hidden bg-black border border-slate-800">
               {result.media_type === "video" ? (
                 <video
-                  src={result.result_url}
+                  src={api.mediaUrl(result.result_url)}
                   controls
                   autoPlay
                   loop
@@ -113,7 +113,7 @@ export const LabPage: React.FC = () => {
                 />
               ) : (
                 <img
-                  src={result.result_url}
+                  src={api.mediaUrl(result.result_url)}
                   alt="Результат анализа YOLOv8"
                   className="w-full max-h-[460px] object-contain mx-auto"
                 />

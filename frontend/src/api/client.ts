@@ -26,6 +26,7 @@ export interface AuthSession {
   user: User;
   expires_at: string;
   token_type: string;
+  access_token: string | null;
 }
 
 export interface BagTrack {
@@ -238,10 +239,64 @@ export class ApiError extends Error {
 
 export const UNAUTHORIZED_EVENT = "school-security:unauthorized";
 
+/**
+ * Токен держим в памяти + sessionStorage.
+ *
+ * Основной транспорт — HttpOnly cookie. Но в iframe-превью (Live Preview, встраивание
+ * на сторонний домен) браузер блокирует сторонние cookie: после логина все запросы
+ * получали 401 и пользователя выбрасывало обратно на экран входа.
+ * Поэтому дублируем JWT в заголовок Authorization, а для <img>/<video> — в ?token=.
+ */
+const TOKEN_STORAGE_KEY = "school_security_token";
+let accessToken: string | null = readStoredToken();
+
+function readStoredToken(): string | null {
+  try {
+    return window.sessionStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setAccessToken(token: string | null): void {
+  accessToken = token;
+  try {
+    if (token) window.sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+    else window.sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    // приватный режим / заблокированное хранилище — живём с токеном в памяти
+  }
+}
+
+export function getAccessToken(): string | null {
+  return accessToken ?? readStoredToken();
+}
+
+export function hasAccessToken(): boolean {
+  return Boolean(getAccessToken());
+}
+
+/**
+ * Добавляет ?token= к URL медиафайла — теги <img>/<video>/<a download>
+ * не умеют отправлять Authorization-заголовок.
+ */
+export function withToken(url: string): string {
+  const token = getAccessToken();
+  if (!token || !url.startsWith("/")) return url;
+  if (url.includes("token=")) return url;
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}token=${encodeURIComponent(token)}`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getAccessToken();
+  const headers = new Headers(init?.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
   const res = await fetch(`${API_BASE}${path}`, {
     credentials: "same-origin",
     ...init,
+    headers,
   });
 
   if (!res.ok) {
@@ -257,6 +312,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       // ignore parse error
     }
     if (res.status === 401 && !path.startsWith("/auth/")) {
+      setAccessToken(null);
       window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
     }
     throw new ApiError(detail, res.status);
@@ -329,7 +385,14 @@ export const api = {
 
   deleteViolation: (id: number) => request<void>(`/violations/${id}`, { method: "DELETE" }),
 
-  videoDownloadUrl: (violation: { id: number }) => `/api/violations/${violation.id}/video?download=true`,
+  videoDownloadUrl: (violation: { id: number }) =>
+    withToken(`/api/violations/${violation.id}/video?download=true`),
+
+  streamUrl: (cameraId: number) => withToken(`/api/cameras/${cameraId}/stream`),
+
+  cameraSnapshotUrl: (cameraId: number) => withToken(`/api/cameras/${cameraId}/snapshot`),
+
+  mediaUrl: (path: string) => withToken(path),
 
   // ── Медиа-лаборатория ───────────────────────────────────────────────────
   analyzeMedia: (file: File, saveViolation: boolean) => {
@@ -402,5 +465,7 @@ export const api = {
 
   getAuditSummary: () => request<AuditSummary>("/audit/summary"),
 
-  auditExportUrl: "/api/audit/export",
+  get auditExportUrl() {
+    return withToken("/api/audit/export");
+  },
 };

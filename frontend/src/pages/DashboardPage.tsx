@@ -233,7 +233,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
               </button>
             </div>
             <img
-              src={`/api/cameras/${expandedCamera.id}/stream`}
+              src={api.streamUrl(expandedCamera.id)}
               alt={expandedCamera.name}
               className="w-full rounded-xl bg-black aspect-video object-contain"
             />

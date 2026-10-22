@@ -1,6 +1,6 @@
 import React from "react";
 import { Hourglass, KeyRound, Maximize2, Pause, Play, Sparkles, Trash2 } from "lucide-react";
-import { Camera } from "../api/client";
+import { api, Camera } from "../api/client";
 
 interface CameraCardProps {
   camera: Camera;
@@ -42,7 +42,7 @@ export const CameraCard: React.FC<CameraCardProps> = ({
       <div className="aspect-video bg-slate-950 relative group">
         {camera.is_active ? (
           <img
-            src={`/api/cameras/${camera.id}/stream`}
+            src={api.streamUrl(camera.id)}
             alt={camera.name}
             className="w-full h-full object-cover"
           />

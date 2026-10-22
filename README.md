@@ -135,7 +135,7 @@ docker compose up -d --build
 ### Тесты и сборка
 
 ```bash
-cd backend && python -m pytest tests -q     # 45 тестов
+cd backend && python -m pytest tests -q     # 48 тестов
 cd frontend && npm run build                # tsc + vite build
 ```
 
@@ -143,7 +143,7 @@ cd frontend && npm run build                # tsc + vite build
 
 ## 📡 Основные API Endpoints
 
-### Аутентификация (публичные)
+## Аутентификация (публичные)
 
 | Метод | Эндпоинт | Описание |
 |-------|----------|----------|
@@ -152,6 +152,26 @@ cd frontend && npm run build                # tsc + vite build
 | `POST` | `/api/auth/logout` | Выход, очистка cookie |
 | `GET` | `/api/auth/me` | Текущий пользователь + права |
 | `GET` | `/api/auth/demo-accounts` | Карточки ролей для страницы логина |
+
+## 🪟 Вход в iframe-превью (Live Preview)
+
+HttpOnly cookie `school_session` — основной транспорт сессии. Но встроенное превью
+открывается в sandboxed iframe, где сторонние cookie блокируются: логин проходил,
+а следующий же запрос возвращал `401` и пользователя выбрасывало на экран входа
+(«Сессия истекла — войдите заново»).
+
+Поэтому добавлен fallback, включённый по умолчанию (`AUTH_RETURN_TOKEN_IN_BODY=true`):
+
+1. `POST /api/auth/login` возвращает JWT ещё и в теле — поле `access_token`.
+2. Фронтенд держит токен в памяти и `sessionStorage` (`school_security_token`)
+   и отправляет его заголовком `Authorization: Bearer <token>`.
+3. Теги `<img>`, `<video>` и ссылки на скачивание не умеют слать заголовки,
+   поэтому медиа-URL получают `?token=<token>` (`api.withToken()`).
+
+Порядок проверки токена на бэкенде: `Authorization: Bearer` → cookie `school_session`
+→ query-параметр `token` (только для `/api/.../stream`, `/api/.../snapshot`,
+`/api/violations/{id}/video` и `/media/*`). Cookie остаётся основным способом
+для обычного браузера, Bearer-режим включается автоматически, когда cookie недоступны.
 
 ### Камеры и инциденты
 

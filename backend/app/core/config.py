@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 12 * 60
     AUTH_COOKIE_NAME: str = "school_session"
+    # Дублировать токен в теле ответа логина: нужно для превью/iframe, где браузер
+    # блокирует сторонние cookie. В строгом production можно выключить.
+    AUTH_RETURN_TOKEN_IN_BODY: bool = True
     COOKIE_SECURE: bool = False
     COOKIE_SAMESITE: str = "lax"
     DEMO_LOGIN_ENABLED: bool = True

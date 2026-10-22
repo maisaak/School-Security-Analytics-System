@@ -299,7 +299,7 @@ export const AnalyticsPage: React.FC = () => {
                   className="flex items-center gap-2.5 rounded-lg border border-slate-800/80 bg-slate-950/60 px-2.5 py-2"
                 >
                   <img
-                    src={v.image_path}
+                    src={api.mediaUrl(v.image_path)}
                     alt={meta.title}
                     loading="lazy"
                     className="w-12 h-8 rounded object-cover border border-slate-800 shrink-0"
@@ -311,7 +311,7 @@ export const AnalyticsPage: React.FC = () => {
                     <p className="text-[9px] text-slate-500 font-mono">{formatDateTime(v.detected_at)}</p>
                   </div>
                   <a
-                    href={`/api/violations/${v.id}/video?download=true`}
+                    href={api.videoDownloadUrl(v)}
                     className="p-1.5 rounded-lg text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition shrink-0"
                     title="Скачать видеофрагмент"
                   >

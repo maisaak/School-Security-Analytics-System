@@ -138,7 +138,7 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
                   <div className="aspect-video">
                     {cam.is_active ? (
                       <img
-                        src={`/api/cameras/${cam.id}/stream`}
+                        src={api.streamUrl(cam.id)}
                         alt={cam.name}
                         className="w-full h-full object-cover"
                       />
@@ -252,7 +252,7 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
                         className="relative w-20 h-14 rounded-lg overflow-hidden border border-slate-700 shrink-0 bg-black group"
                       >
                         <img
-                          src={alarm.image_path}
+                          src={api.mediaUrl(alarm.image_path)}
                           alt={meta.title}
                           loading="lazy"
                           className="w-full h-full object-cover group-hover:scale-105 transition"
@@ -347,7 +347,7 @@ export const GuardPage: React.FC<GuardPageProps> = ({ onGlobalStatsUpdate }) => 
               </button>
             </div>
             <img
-              src={`/api/cameras/${expandedCamera.id}/stream`}
+              src={api.streamUrl(expandedCamera.id)}
               alt={expandedCamera.name}
               className="w-full rounded-xl bg-black aspect-video object-contain"
             />

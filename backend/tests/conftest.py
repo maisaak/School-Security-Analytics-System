@@ -72,3 +72,19 @@ def first_camera(client, admin_headers) -> dict:
     cameras = client.get("/api/cameras", headers=admin_headers).json()
     assert cameras
     return cameras[0]
+
+
+@pytest.fixture(scope="session")
+def warm_camera(client, admin_headers, first_camera) -> dict:
+    """Ждём, пока воркер камеры отрендерит первый кадр (иначе snapshot отдаёт 404)."""
+    import time
+
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        response = client.get(
+            f"/api/cameras/{first_camera['id']}/snapshot", headers=admin_headers
+        )
+        if response.status_code == 200:
+            return first_camera
+        time.sleep(0.5)
+    raise AssertionError("Камера не отдала первый кадр за 60 секунд")

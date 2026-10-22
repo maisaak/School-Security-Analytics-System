@@ -1,6 +1,6 @@
 import React from "react";
 import { CheckCircle2, Download, Hourglass, ScanEye, X } from "lucide-react";
-import { Violation } from "../api/client";
+import { api, Violation } from "../api/client";
 import { VIOLATION_META } from "./ViolationsTable";
 import { formatDateTime } from "./ui";
 
@@ -19,8 +19,8 @@ export const VideoModal: React.FC<VideoModalProps> = ({
 }) => {
   if (!violation) return null;
   const meta = VIOLATION_META[violation.violation_type] ?? VIOLATION_META.suspicious_bag;
-  const downloadUrl = `/api/violations/${violation.id}/video?download=true`;
-  const snapshotUrl = `${violation.image_path}?download=true`;
+  const downloadUrl = api.videoDownloadUrl(violation);
+  const snapshotUrl = api.mediaUrl(violation.image_path);
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
@@ -70,7 +70,7 @@ export const VideoModal: React.FC<VideoModalProps> = ({
           <div className="lg:col-span-2 bg-black rounded-xl overflow-hidden border border-slate-800">
             <video
               key={violation.video_url}
-              src={violation.video_url}
+              src={api.mediaUrl(violation.video_url)}
               controls
               autoPlay
               loop
@@ -83,7 +83,7 @@ export const VideoModal: React.FC<VideoModalProps> = ({
             <p className="text-[11px] font-medium text-slate-400">Стоп-кадр срабатывания YOLOv8</p>
             <a href={snapshotUrl} download={`incident_${violation.id}.jpg`} title="Скачать фото улики">
               <img
-                src={violation.image_path}
+                src={api.mediaUrl(violation.image_path)}
                 alt={meta.title}
                 className="w-full rounded-lg border border-slate-800 object-cover hover:opacity-90 transition"
               />

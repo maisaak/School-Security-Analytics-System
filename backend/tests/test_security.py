@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
 from app.core.config import settings
 from app.core.security import (
     hash_password,
@@ -12,6 +14,7 @@ from app.core.security import (
 )
 from app.db.models import Camera
 from app.db.session import SessionLocal
+from app.main import app
 
 
 def test_mask_stream_url_hides_credentials():
@@ -94,7 +97,9 @@ def test_media_files_require_session(client, admin_headers):
     sample.write_bytes(b"\xff\xd8\xff\xdb" + b"0" * 128)
 
     try:
-        assert client.get("/media/snapshots/test_guard_evidence.jpg").status_code == 401
+        # Анонимный клиент без cookie сессии
+        anonymous = TestClient(app)
+        assert anonymous.get("/media/snapshots/test_guard_evidence.jpg").status_code == 401
         ok = client.get("/media/snapshots/test_guard_evidence.jpg", headers=admin_headers)
         assert ok.status_code == 200
         assert ok.content.startswith(b"\xff\xd8")

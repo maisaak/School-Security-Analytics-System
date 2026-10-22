@@ -71,7 +71,11 @@ def _issue_session(response: Response, db: Session, user: User) -> AuthSessionOu
     user.last_login_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(user)
-    return AuthSessionOut(user=serialize_user(user), expires_at=expires_at)
+    return AuthSessionOut(
+        user=serialize_user(user),
+        expires_at=expires_at,
+        access_token=token if settings.AUTH_RETURN_TOKEN_IN_BODY else None,
+    )
 
 
 @router.post("/login", response_model=AuthSessionOut)

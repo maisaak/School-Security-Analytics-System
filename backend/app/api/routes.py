@@ -4,6 +4,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import cv2
 import numpy as np
@@ -216,7 +217,9 @@ async def stream_camera(
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
-            "X-Camera-Name": camera_name[:80],
+            # HTTP-заголовки допускают только latin-1: кириллическое имя камеры
+            # передаём в percent-encoding, иначе Starlette падает с UnicodeEncodeError.
+            "X-Camera-Name": quote(camera_name[:80], safe=""),
         },
     )
 

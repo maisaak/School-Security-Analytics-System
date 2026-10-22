@@ -49,6 +49,7 @@ class AuthSessionOut(BaseModel):
     user: UserOut
     expires_at: datetime
     token_type: str = "cookie"
+    access_token: str | None = None
 
 
 class DemoAccountOut(BaseModel):

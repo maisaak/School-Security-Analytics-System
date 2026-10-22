@@ -1,6 +1,6 @@
 import React from "react";
 import { CheckCircle2, Clock, Hourglass, Play, ScanEye, Trash2 } from "lucide-react";
-import { Camera, Violation } from "../api/client";
+import { api, Camera, Violation } from "../api/client";
 import { formatDateTime } from "./ui";
 
 export const VIOLATION_META: Record<
@@ -131,7 +131,7 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
                         className="relative group block rounded-lg overflow-hidden border border-slate-700 w-24 h-14 bg-black shrink-0"
                       >
                         <img
-                          src={v.image_path}
+                          src={api.mediaUrl(v.image_path)}
                           alt={meta.title}
                           loading="lazy"
                           className="w-full h-full object-cover group-hover:scale-105 transition"

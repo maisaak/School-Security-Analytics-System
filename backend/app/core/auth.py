@@ -17,18 +17,19 @@ from app.services.audit import record_audit
 def extract_token(request: Request) -> str | None:
     """
     Токен берём в порядке приоритета:
-      1. HttpOnly cookie — работает для fetch/XHR, а также для <img MJPEG> и <video MP4>,
-         которые браузер запрашивает без возможности добавить Authorization-заголовок.
-      2. Authorization: Bearer — для внешних интеграций, Swagger и Postman.
-      3. ?token= — запасной вариант для плееров, не отправляющих cookie.
+      1. Authorization: Bearer — основной путь для SPA, когда браузер блокирует
+         сторонние cookie (например, Live Preview в iframe), а также для Swagger/Postman.
+      2. HttpOnly cookie — путь по умолчанию для <img MJPEG> и <video MP4>,
+         которые браузер запрашивает без возможности добавить заголовок.
+      3. ?token= — запасной вариант для медиа-тегов, если cookie недоступны.
     """
-    cookie_token = request.cookies.get(settings.AUTH_COOKIE_NAME)
-    if cookie_token:
-        return cookie_token
-
     header = request.headers.get("authorization") or ""
     if header.lower().startswith("bearer "):
         return header[7:].strip()
+
+    cookie_token = request.cookies.get(settings.AUTH_COOKIE_NAME)
+    if cookie_token:
+        return cookie_token
 
     query_token = request.query_params.get("token")
     if query_token:
