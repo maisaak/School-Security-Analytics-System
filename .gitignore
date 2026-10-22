@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+.vite/
+
+# Runtime Media & Training Runs
+media/
+backend/media/
+ml/runs/
+ml/datasets/custom/
+/yolo*.pt
+
+# Environment
+.env
+.DS_Store

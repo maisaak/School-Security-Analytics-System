@@ -1,0 +1,86 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: school_security_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: school_security
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: school_security_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: school_security_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/school_security
+      REDIS_URL: redis://redis:6379/0
+      YOLO_COCO_MODEL_PATH: /app/ml/models/yolov8n.pt
+      YOLO_WEAPON_MODEL_PATH: /app/ml/models/weapon_yolov8.pt
+      YOLO_CUSTOM_MODEL_PATH: /app/ml/models/school_security_best.pt
+      MEDIA_ROOT: /app/media
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./media:/app/media
+      - ./ml:/app/ml
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: school_security_worker
+    command: celery -A app.services.tasks.celery_app worker --loglevel=info
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/school_security
+      REDIS_URL: redis://redis:6379/0
+      YOLO_COCO_MODEL_PATH: /app/ml/models/yolov8n.pt
+      YOLO_WEAPON_MODEL_PATH: /app/ml/models/weapon_yolov8.pt
+      YOLO_CUSTOM_MODEL_PATH: /app/ml/models/school_security_best.pt
+      MEDIA_ROOT: /app/media
+    volumes:
+      - ./media:/app/media
+      - ./ml:/app/ml
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: school_security_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
