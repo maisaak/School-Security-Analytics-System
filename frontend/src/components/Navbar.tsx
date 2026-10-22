@@ -16,6 +16,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Upload,
+  UserCheck,
   Users,
   Video,
   X,
@@ -26,7 +27,7 @@ import { usePrefs } from "../prefs/PrefsContext";
 export type AppTab =
   | "dashboard"
   | "guard"
-  | "school"
+  | "visitors"
   | "analytics"
   | "lab"
   | "training"
@@ -46,7 +47,7 @@ interface TabMeta {
 const TABS: TabMeta[] = [
   { id: "dashboard", label: "Мониторинг и инциденты", shortLabel: "Мониторинг", icon: Video, badge: "unack" },
   { id: "guard", label: "КПП, тревоги и видеостена", shortLabel: "КПП", icon: ShieldAlert, badge: "unack" },
-  { id: "school", label: "СКУД и посетители", shortLabel: "СКУД", icon: GraduationCap },
+  { id: "visitors", label: "Гостевые пропуска", shortLabel: "Гости", icon: UserCheck },
   { id: "analytics", label: "Аналитика и отчёты", shortLabel: "Аналитика", icon: BarChart3 },
   { id: "lab", label: "Проверка медиа", shortLabel: "Медиа", icon: Upload },
   { id: "training", label: "Модели YOLO", shortLabel: "YOLO", icon: BrainCircuit },
@@ -130,13 +131,17 @@ export const Navbar: React.FC<NavbarProps> = ({
             onClick={() => onSelectTab(visibleTabs[0]?.id ?? "dashboard")}
             className="flex items-center gap-2.5 sm:gap-3 min-w-0 text-left"
           >
-            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-white ring-1 ring-slate-700/70 shadow-sm overflow-hidden shrink-0 p-0.5">
+            <div
+              className="rounded-xl bg-white ring-1 ring-slate-700/70 shadow-sm overflow-hidden p-0.5"
+              style={{ width: 38, height: 38, flex: "0 0 auto" }}
+            >
               <img
                 src="/brand/logo-192.png"
                 alt="Лицей №6 «Перспектива»"
-                width={40}
-                height={40}
-                className="w-full h-full object-contain"
+                width={38}
+                height={38}
+                className="object-contain"
+                style={{ width: "100%", height: "100%", maxWidth: "100%", maxHeight: "100%", display: "block" }}
               />
             </div>
             <div className="min-w-0">

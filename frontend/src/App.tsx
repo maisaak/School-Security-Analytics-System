@@ -12,7 +12,7 @@ import { GuardPage } from "./pages/GuardPage";
 import { LabPage } from "./pages/LabPage";
 import { LoginPage } from "./pages/LoginPage";
 import { OpsPage } from "./pages/OpsPage";
-import { SchoolPage } from "./pages/SchoolPage";
+import { VisitorsPage } from "./pages/VisitorsPage";
 import { SecurityPage } from "./pages/SecurityPage";
 import { TrainingPage } from "./pages/TrainingPage";
 import { UsersPage } from "./pages/UsersPage";
@@ -21,7 +21,7 @@ import { PrefsProvider, usePrefs } from "./prefs/PrefsContext";
 const TAB_PERMISSION: Record<AppTab, string> = {
   dashboard: "cameras:view",
   guard: "guard:console",
-  school: "access:view",
+  visitors: "visitors:manage",
   analytics: "analytics:view",
   lab: "media:check",
   training: "models:train",
@@ -78,7 +78,7 @@ const AppShellInner: React.FC = () => {
       <main className={`flex-1 max-w-[1500px] w-full mx-auto px-3 sm:px-6 py-4 sm:py-7 ${navSpace}`}>
         {activeTab === "dashboard" && <DashboardPage onGlobalStatsUpdate={setGlobalStats} />}
         {activeTab === "guard" && <GuardPage onGlobalStatsUpdate={setGlobalStats} />}
-        {activeTab === "school" && <SchoolPage />}
+        {activeTab === "visitors" && <VisitorsPage />}
         {activeTab === "analytics" && <AnalyticsPage />}
         {activeTab === "lab" && <LabPage />}
         {activeTab === "training" && <TrainingPage />}
