@@ -126,15 +126,21 @@ export const LoginPage: React.FC = () => {
       <div className="relative max-w-6xl mx-auto px-4 sm:px-6 py-10 lg:py-16 grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
         <div className="lg:col-span-6 space-y-8">
           <div className="flex items-center gap-3.5">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
-              <ShieldCheck className="w-6 h-6" />
+            <div className="w-14 h-14 rounded-2xl bg-white ring-1 ring-slate-700/70 shadow-lg shadow-black/20 overflow-hidden p-1 shrink-0">
+              <img
+                src="/brand/logo-192.png"
+                alt="Лицей №6 «Перспектива»"
+                width={56}
+                height={56}
+                className="w-full h-full object-contain"
+              />
             </div>
             <div>
               <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-ink">
-                School Security Analytics
+                Аналитика безопасности школы
               </h1>
               <p className="text-xs text-slate-400">
-                Видеоаналитика школы · YOLOv8 ·{" "}
+                Лицей №6 «Перспектива» · видеоаналитика YOLO ·{" "}
                 <span className="font-mono text-emerald-300">v{APP_VERSION}</span>
               </p>
             </div>
@@ -157,7 +163,7 @@ export const LoginPage: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-xl">
             {[
-              { icon: ScanEye, title: "Живой MJPEG", text: "Камеры без задержек" },
+              { icon: ScanEye, title: "Живое видео", text: "HLS без задержек" },
               { icon: ShieldAlert, title: "Тревоги", text: "Выдержка 6 секунд" },
               { icon: BrainCircuit, title: "Validation Gate", text: "Откат при падении mAP@50" },
             ].map(({ icon: Icon, title, text }) => (

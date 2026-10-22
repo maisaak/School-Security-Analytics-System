@@ -81,7 +81,8 @@ const AppShell: React.FC = () => {
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
             <span>
-              {systemStatus?.project ?? "School Security Analytics"} · v{systemStatus?.version ?? "2.0.0"}
+              {systemStatus?.project ?? "Аналитика безопасности школы"} · Лицей №6 «Перспектива» · v
+              {systemStatus?.version ?? "2.0.0"}
             </span>
           </div>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1">

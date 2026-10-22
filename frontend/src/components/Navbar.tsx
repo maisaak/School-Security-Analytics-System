@@ -105,8 +105,14 @@ export const Navbar: React.FC<NavbarProps> = ({
       <header className="sticky top-0 z-40 border-b border-slate-800/80 bg-slate-950/95 backdrop-blur-md">
         <div className="max-w-[1500px] mx-auto px-3 sm:px-6 py-2.5 sm:py-3 flex flex-wrap items-center justify-between gap-2 sm:gap-3">
           <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-brand-500/15 border border-brand-500/30 flex items-center justify-center text-brand-400 shrink-0">
-              <Shield className="w-5 h-5" />
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-white ring-1 ring-slate-700/70 shadow-sm overflow-hidden shrink-0 p-0.5">
+              <img
+                src="/brand/logo-192.png"
+                alt="Лицей №6 «Перспектива»"
+                width={40}
+                height={40}
+                className="w-full h-full object-contain"
+              />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
@@ -119,7 +125,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </span>
               </div>
               <p className="text-[10px] sm:text-[11px] text-slate-500 truncate">
-                Веса: <span className="text-slate-400 font-mono">{activeWeights}</span>
+                <span className="text-slate-400">Лицей №6 «Перспектива»</span> · веса:{" "}
+                <span className="text-slate-400 font-mono">{activeWeights}</span>
               </p>
             </div>
           </div>
