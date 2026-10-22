@@ -1,8 +1,14 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+const now = new Date();
+const stamp = `${now.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __BUILD_STAMP__: JSON.stringify(stamp),
+  },
   server: {
     host: "0.0.0.0",
     port: 3000,

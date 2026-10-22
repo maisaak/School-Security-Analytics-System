@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { api, DemoAccount, Role } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { APP_VERSION, BUILD_STAMP } from "../build-info";
 
 const ROLE_META: Record<
   Role,
@@ -301,6 +302,13 @@ export const LoginPage: React.FC = () => {
                 Войти в систему
               </button>
             </form>
+          </div>
+
+          <div className="flex items-center justify-between gap-3 px-1 text-[10px] text-slate-600">
+            <span>
+              v{APP_VERSION} · сборка {BUILD_STAMP}
+            </span>
+            <span>JWT · Bearer + cookie</span>
           </div>
 
           <div className="rounded-2xl border border-slate-800/80 bg-slate-900/40 p-3.5">

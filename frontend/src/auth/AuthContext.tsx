@@ -1,5 +1,5 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { api, hasAccessToken, setAccessToken, UNAUTHORIZED_EVENT, User } from "../api/client";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { api, setAccessToken, UNAUTHORIZED_EVENT, User } from "../api/client";
 
 interface AuthContextValue {
   user: User | null;
@@ -17,25 +17,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Баннер «сессия истекла» показываем только тем, у кого сессия реально была:
+  // иначе любой фоновый 401 на холодном старте пугает пользователя.
+  const hadSession = useRef(false);
 
   const refresh = useCallback(async () => {
-    // Если cookie сессии заблокированы браузером, работаем по токену из sessionStorage
-    if (!hasAccessToken()) {
-      try {
-        const me = await api.me();
-        setUser(me);
-      } catch {
-        setUser(null);
-      } finally {
-        setLoading(false);
-      }
-      return;
-    }
     try {
       const me = await api.me();
       setUser(me);
+      hadSession.current = true;
     } catch {
-      setAccessToken(null);
       setUser(null);
     } finally {
       setLoading(false);
@@ -49,7 +40,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const handler = () => {
       setUser(null);
-      setError("Сессия истекла — войдите заново");
+      if (hadSession.current) {
+        setError("Сессия истекла — войдите заново");
+      }
+      hadSession.current = false;
     };
     window.addEventListener(UNAUTHORIZED_EVENT, handler);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, handler);
@@ -59,8 +53,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setError(null);
     try {
       const session = await api.login(username, password);
-      setAccessToken(session.access_token);
+      setAccessToken(session.access_token ?? null);
       setUser(session.user);
+      hadSession.current = true;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Не удалось войти";
       setError(message);
@@ -72,8 +67,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setError(null);
     try {
       const session = await api.demoLogin(username);
-      setAccessToken(session.access_token);
+      setAccessToken(session.access_token ?? null);
       setUser(session.user);
+      hadSession.current = true;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Не удалось выполнить быстрый вход";
       setError(message);
@@ -88,6 +84,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setAccessToken(null);
       setUser(null);
       setError(null);
+      hadSession.current = false;
     }
   }, []);
 

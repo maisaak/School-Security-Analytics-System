@@ -201,3 +201,34 @@ def test_auth_session_reports_httponly_cookie_and_token(client):
     assert payload["token_type"] == "cookie"
     assert payload["access_token"]
     assert "httponly" in response.headers.get("set-cookie", "").lower()
+
+
+def test_token_query_parameter_works_for_regular_api(client, warm_camera):
+    """
+    Запасной транспорт для превью-прокси, вырезающего Authorization:
+    фронтенд при 401 повторяет запрос с ?token= и переключается в этот режим.
+    """
+    probe = TestClient(app)
+    token = probe.post(
+        "/api/auth/login",
+        json={"username": settings.DEMO_ADMIN_USERNAME, "password": settings.DEMO_ADMIN_PASSWORD},
+    ).json()["access_token"]
+
+    anonymous = TestClient(app)
+    for path in ("/api/stats", "/api/cameras", "/api/violations", "/api/auth/me"):
+        assert anonymous.get(f"{path}?token={token}").status_code == 200, path
+
+
+def test_authorization_header_takes_priority_over_query_token(client):
+    """Заголовок приоритетнее query-параметра: невалидный ?token= не должен обходить Bearer."""
+    probe = TestClient(app)
+    token = probe.post(
+        "/api/auth/login",
+        json={"username": settings.DEMO_ADMIN_USERNAME, "password": settings.DEMO_ADMIN_PASSWORD},
+    ).json()["access_token"]
+
+    response = probe.get(
+        f"/api/auth/me?token=broken", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+    assert response.json()["username"] == settings.DEMO_ADMIN_USERNAME

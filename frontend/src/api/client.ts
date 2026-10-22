@@ -288,16 +288,53 @@ export function withToken(url: string): string {
   return `${url}${separator}token=${encodeURIComponent(token)}`;
 }
 
+/**
+ * Режим передачи токена, который реально работает в текущем окружении:
+ * - "bearer" — основной (заголовок Authorization);
+ * - "query"  — запасной, если прокси/iframe вырезает заголовки: ?token=...
+ * - "cookie" — токена ещё нет, полагаемся на HttpOnly cookie.
+ */
+let queryAuthMode = false;
+
+export type AuthMode = "bearer" | "query" | "cookie";
+
+export function getAuthMode(): AuthMode {
+  if (queryAuthMode) return "query";
+  return getAccessToken() ? "bearer" : "cookie";
+}
+
+function withQueryToken(url: string, token: string): string {
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}token=${encodeURIComponent(token)}`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getAccessToken();
   const headers = new Headers(init?.headers);
-  if (token) headers.set("Authorization", `Bearer ${token}`);
+  if (token && !queryAuthMode) headers.set("Authorization", `Bearer ${token}`);
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  const baseUrl = `${API_BASE}${path}`;
+  const url = token && queryAuthMode ? withQueryToken(baseUrl, token) : baseUrl;
+
+  let res = await fetch(url, {
     credentials: "same-origin",
     ...init,
     headers,
   });
+
+  // Прокси Live Preview иногда вырезает нестандартные заголовки: 401 при живом
+  // токене. Пробуем тот же запрос с ?token= и, если помогло, запоминаем режим.
+  if (res.status === 401 && token && !queryAuthMode) {
+    const retry = await fetch(withQueryToken(baseUrl, token), {
+      credentials: "same-origin",
+      ...init,
+      headers,
+    });
+    if (retry.status !== 401) {
+      queryAuthMode = true;
+      res = retry;
+    }
+  }
 
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
