@@ -267,6 +267,9 @@ class ViolationDetector:
             "safe_objects": safe_objects,
             "person_count": len(person_boxes),
             "latency_ms": latency_ms,
+            # Сырые кандидаты для трекера ByteTrack / таймера выдержки бесхозной сумки
+            "bags": [{"confidence": round(c, 4), "bbox": b} for c, b in bag_candidates],
+            "persons": [{"confidence": round(c, 4), "bbox": b} for c, b in person_boxes],
         }
 
     def annotate_frame(
@@ -277,6 +280,21 @@ class ViolationDetector:
     ) -> np.ndarray:
         canvas = frame.copy()
         h, w = canvas.shape[:2]
+
+        # Состояние трекинга бесхозных предметов: таймер выдержки до подтверждения тревоги
+        dwell_threshold = float(analysis.get("bag_dwell_threshold") or settings.UNATTENDED_DWELL_SEC)
+        for state in analysis.get("bag_tracks", []):
+            if state.get("state") == "unattended":
+                continue  # уже подтверждённая тревога рисуется ниже как violation
+            x1, y1, x2, y2 = state["bbox"]
+            dashed = (11, 158, 245)
+            step = 14
+            for x in range(x1, max(x1 + 1, x2), step * 2):
+                cv2.line(canvas, (x, y1), (min(x + step, x2), y1), dashed, 2)
+                cv2.line(canvas, (x, y2), (min(x + step, x2), y2), dashed, 2)
+            for y in range(y1, max(y1 + 1, y2), step * 2):
+                cv2.line(canvas, (x1, y), (x1, min(y + step, y2)), dashed, 2)
+                cv2.line(canvas, (x2, y), (x2, min(y + step, y2)), dashed, 2)
 
         # Тонкие уголки и рамки в стиле профессиональных NVR-систем
         for obj in analysis.get("safe_objects", []):
@@ -326,6 +344,17 @@ class ViolationDetector:
             fill = (16, 120, 88, 215) if obj["kind"] == "attended_bag" else (15, 118, 110, 195)
             draw.rounded_rectangle((x1, by, x1 + tw + 14, by + th + 8), radius=5, fill=fill)
             draw.text((x1 + 7, by + 3), txt, font=FONT_BADGE, fill=(255, 255, 255, 255))
+
+        for state in analysis.get("bag_tracks", []):
+            if state.get("state") == "unattended":
+                continue
+            x1, y1, _, _ = state["bbox"]
+            txt = f"ВЫДЕРЖКА {state.get('dwell_seconds', 0):.1f} / {dwell_threshold:.0f} c"
+            tb = draw.textbbox((0, 0), txt, font=FONT_BADGE)
+            tw, th = tb[2] - tb[0], tb[3] - tb[1]
+            by = max(4, y1 - th - 10)
+            draw.rounded_rectangle((x1, by, x1 + tw + 12, by + th + 8), radius=5, fill=(150, 96, 10, 220))
+            draw.text((x1 + 6, by + 3), txt, font=FONT_BADGE, fill=(255, 245, 220, 255))
 
         for viol in analysis.get("violations", []):
             vtype = viol["type"]

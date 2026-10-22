@@ -26,3 +26,7 @@ ml/datasets/custom/
 # Environment
 .env
 .DS_Store
+
+# Auth secret and weights registry (runtime artifacts)
+.jwt_secret
+ml/versions/

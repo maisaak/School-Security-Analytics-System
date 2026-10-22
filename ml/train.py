@@ -120,6 +120,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=8)
     parser.add_argument("--data", type=str, default=None)
     parser.add_argument("--base", type=str, default=None)
+    parser.add_argument("--output", type=str, default=None, help="Путь для сохранения обученных весов (staging)")
     parser.add_argument("--json-progress", action="store_true")
     args = parser.parse_args()
 
@@ -130,6 +131,7 @@ if __name__ == "__main__":
     summary = train_model(
         base_weights=args.base,
         data_yaml=args.data,
+        output_weights=args.output,
         epochs=args.epochs,
         imgsz=416,
         batch=8,

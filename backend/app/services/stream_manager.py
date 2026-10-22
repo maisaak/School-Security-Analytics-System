@@ -17,6 +17,7 @@ from app.db.models import Violation
 from app.db.session import SessionLocal
 from app.models.detector import detector
 from app.services.simulator import RealisticCCTVSimulator
+from app.services.tracking import BagDwellMonitor
 
 
 def _resolve_ffmpeg_bin() -> str:
@@ -86,6 +87,10 @@ class CameraWorker(threading.Thread):
     TARGET_FPS = 12.0
     DETECT_EVERY_N_FRAMES = 3
 
+    @property
+    def target_fps(self) -> float:
+        return float(settings.STREAM_TARGET_FPS or self.TARGET_FPS)
+
     def __init__(self, camera_id: int, name: str, rtsp_url: str, phase_offset: float = 0.0) -> None:
         super().__init__(daemon=True)
         self.camera_id = camera_id
@@ -106,6 +111,9 @@ class CameraWorker(threading.Thread):
         self.frame_buffer: deque[np.ndarray] = deque(maxlen=54)  # ~4.5 секунды видеофрагмента
         self.last_analysis: dict = {"violations": [], "safe_objects": [], "person_count": 0, "latency_ms": 0.0}
         self.last_violation_ts: dict[str, float] = {}
+        # ByteTrack-подобный трекер + таймер выдержки бесхозной сумки
+        self.bag_monitor = BagDwellMonitor() if settings.TRACKER_ENABLED else None
+        self.track_alert_ts: dict[str, float] = {}
 
         self.current_fps: float = 0.0
         self.stream_online: bool = False
@@ -129,6 +137,8 @@ class CameraWorker(threading.Thread):
         bbox: list[int],
         snapshot: np.ndarray,
         clip_frames: list[np.ndarray],
+        track_id: str | None = None,
+        dwell_seconds: float | None = None,
     ) -> None:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
         img_rel = f"snapshots/cam{self.camera_id}_{v_type}_{stamp}.jpg"
@@ -138,7 +148,7 @@ class CameraWorker(threading.Thread):
         vid_abs = settings.MEDIA_ROOT / vid_rel
 
         cv2.imwrite(str(img_abs), snapshot, [int(cv2.IMWRITE_JPEG_QUALITY), 88])
-        encode_h264_clip(clip_frames, vid_abs, fps=self.TARGET_FPS)
+        encode_h264_clip(clip_frames, vid_abs, fps=self.target_fps)
 
         db = SessionLocal()
         try:
@@ -149,6 +159,8 @@ class CameraWorker(threading.Thread):
                 bbox_json=json.dumps(bbox),
                 image_path=f"/media/{img_rel}",
                 video_path=f"/media/{vid_rel}",
+                track_id=track_id,
+                dwell_seconds=round(dwell_seconds, 2) if dwell_seconds is not None else None,
             )
             db.add(row)
             db.commit()
@@ -212,7 +224,7 @@ class CameraWorker(threading.Thread):
                         fps_counter = 0
                         fps_timer = now
 
-                    sleep_left = (1.0 / self.TARGET_FPS) - (time.monotonic() - loop_start)
+                    sleep_left = (1.0 / self.target_fps) - (time.monotonic() - loop_start)
                     if sleep_left > 0:
                         time.sleep(sleep_left)
                 continue
@@ -250,16 +262,38 @@ class CameraWorker(threading.Thread):
                     fps_counter = 0
                     fps_timer = now
 
-                sleep_left = (1.0 / self.TARGET_FPS) - (time.monotonic() - loop_start)
+                sleep_left = (1.0 / self.target_fps) - (time.monotonic() - loop_start)
                 if sleep_left > 0:
                     time.sleep(sleep_left)
 
             cap.release()
             time.sleep(1.0)
 
+    def _apply_dwell_tracking(self, analysis: dict, frame_shape: tuple[int, ...]) -> dict:
+        """
+        Заменяет «мгновенные» тревоги бесхозной сумки на подтверждённые трекером:
+        предмет должен стабильно (>= min_hits кадров) провисеть без владельца дольше dwell-таймера.
+        """
+        if self.bag_monitor is None:
+            return analysis
+        now = time.monotonic()
+        tracked = self.bag_monitor.update(
+            analysis.get("bags", []),
+            analysis.get("persons", []),
+            frame_shape,
+            now,
+        )
+        analysis["bag_tracks"] = tracked["states"]
+        analysis["bag_dwell_threshold"] = tracked["threshold_sec"]
+        analysis["violations"] = [
+            v for v in analysis.get("violations", []) if v.get("type") != "suspicious_bag"
+        ] + tracked["violations"]
+        analysis["confirmed_bag_tracks"] = {v.get("track_id") for v in tracked["violations"]}
+        return analysis
+
     def _process_single_frame(self, raw_frame: np.ndarray, frame_idx: int) -> None:
-        if frame_idx % self.DETECT_EVERY_N_FRAMES == 0:
-            self.last_analysis = detector.detect_frame(raw_frame)
+        if frame_idx % max(1, int(settings.DETECT_EVERY_N_FRAMES)) == 0:
+            self.last_analysis = self._apply_dwell_tracking(detector.detect_frame(raw_frame), raw_frame.shape)
 
         annotated = detector.annotate_frame(raw_frame, self.last_analysis, camera_title=self.name)
         self.frame_buffer.append(annotated)
@@ -272,18 +306,35 @@ class CameraWorker(threading.Thread):
         now = time.monotonic()
         for item in self.last_analysis.get("violations", []):
             v_type = item["type"]
-            if now - self.last_violation_ts.get(v_type, -999.0) >= settings.VIOLATION_COOLDOWN_SEC:
-                self.last_violation_ts[v_type] = now
-                snapshot_copy = annotated.copy()
-                clip_frames = list(self.frame_buffer)
-                # Если буфер ещё короткий (первые секунды старта), дублируем кадры до ~2 сек, чтобы плеер проигрывал плавно
-                while len(clip_frames) < 24:
-                    clip_frames.insert(0, snapshot_copy)
-                threading.Thread(
-                    target=self._save_incident,
-                    args=(v_type, item["confidence"], item["bbox"], snapshot_copy, clip_frames),
-                    daemon=True,
-                ).start()
+            track_id = item.get("track_id")
+            # Для бесхозных предметов кулдаун привязан к конкретному треку:
+            # разные сумки фиксируются независимо, а одна и та же — не чаще раза в N секунд.
+            cooldown_key = f"{v_type}:{track_id}" if track_id else v_type
+            if now - self.track_alert_ts.get(cooldown_key, -999.0) < settings.VIOLATION_COOLDOWN_SEC:
+                continue
+            if track_id is None and now - self.last_violation_ts.get(v_type, -999.0) < settings.VIOLATION_COOLDOWN_SEC:
+                continue
+
+            self.track_alert_ts[cooldown_key] = now
+            self.last_violation_ts[v_type] = now
+            snapshot_copy = annotated.copy()
+            clip_frames = list(self.frame_buffer)
+            # Если буфер ещё короткий (первые секунды старта), дублируем кадры до ~2 сек, чтобы плеер проигрывал плавно
+            while len(clip_frames) < 24:
+                clip_frames.insert(0, snapshot_copy)
+            threading.Thread(
+                target=self._save_incident,
+                args=(
+                    v_type,
+                    item["confidence"],
+                    item["bbox"],
+                    snapshot_copy,
+                    clip_frames,
+                    track_id,
+                    item.get("dwell_seconds"),
+                ),
+                daemon=True,
+            ).start()
 
 
 class StreamManager:
@@ -342,6 +393,7 @@ class StreamManager:
                 "latency_ms": 0.0,
                 "person_count": 0,
                 "active_threats": [],
+                "bag_tracking": [],
                 "is_simulated": False,
             }
         return {
@@ -350,6 +402,7 @@ class StreamManager:
             "latency_ms": worker.last_analysis.get("latency_ms", 0.0),
             "person_count": worker.last_analysis.get("person_count", 0),
             "active_threats": [v["type"] for v in worker.last_analysis.get("violations", [])],
+            "bag_tracking": worker.last_analysis.get("bag_tracks", []),
             "is_simulated": worker.simulator is not None,
         }
 
