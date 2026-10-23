@@ -10,6 +10,7 @@ import {
   GraduationCap,
   LayoutGrid,
   LogOut,
+  Menu,
   MoreHorizontal,
   ScrollText,
   Search,
@@ -125,6 +126,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const { prefs } = usePrefs();
   const [menuOpen, setMenuOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
   const [paletteIndex, setPaletteIndex] = useState(0);
@@ -133,6 +135,17 @@ export const Navbar: React.FC<NavbarProps> = ({
   const RoleIcon = role.icon;
   const visibleTabs = TABS.filter((tab) => permittedTabs.includes(tab.id));
   const bottomNav = useMemo(() => visibleTabs.slice(0, 3), [visibleTabs]);
+  // Разделы, сгруппированные для боковой навигации и мобильной панели «Разделы»
+  const navGroups = useMemo(
+    () =>
+      GROUPS.map((group) => ({
+        label: group.label,
+        items: group.ids
+          .map((id) => visibleTabs.find((tab) => tab.id === id))
+          .filter((tab): tab is TabMeta => Boolean(tab)),
+      })).filter((group) => group.items.length > 0),
+    [visibleTabs]
+  );
 
   useEffect(() => {
     const handler = () => setScrolled(window.scrollY > 8);
@@ -151,6 +164,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         setPaletteIndex(0);
       } else if (event.key === "Escape") {
         setPaletteOpen(false);
+        setDrawerOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -185,6 +199,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     onSelectTab(tab);
     setMenuOpen(false);
     setMoreOpen(false);
+    setDrawerOpen(false);
   };
 
   const unackFor = (tab: TabMeta) => (tab.badge === "unack" ? unacknowledgedCount : 0);
@@ -304,18 +319,14 @@ export const Navbar: React.FC<NavbarProps> = ({
         </button>
 
         <nav className="mt-4 flex-1 space-y-5 overflow-y-auto px-1 pb-2" aria-label="Разделы системы">
-          {GROUPS.map((group) => {
-            const items = group.ids
-              .map((id) => visibleTabs.find((tab) => tab.id === id))
-              .filter((tab): tab is TabMeta => Boolean(tab));
-            if (!items.length) return null;
+          {navGroups.map((group) => {
             return (
               <div key={group.label}>
                 <p className="mb-1.5 px-3 text-[9.5px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   {group.label}
                 </p>
                 <div className="space-y-0.5">
-                  {items.map((tab) => {
+                  {group.items.map((tab) => {
                     const Icon = tab.icon;
                     const active = activeTab === tab.id;
                     const unack = unackFor(tab);
@@ -383,6 +394,15 @@ export const Navbar: React.FC<NavbarProps> = ({
             <Brand onClick={() => goTo(visibleTabs[0]?.id ?? "dashboard")} />
 
             <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+              <button
+                onClick={() => setDrawerOpen(true)}
+                title="Разделы"
+                aria-label="Открыть разделы"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900 px-2.5 py-2 text-[11px] font-medium text-slate-300 transition hover:border-slate-700 hover:bg-slate-800 hover:text-ink"
+              >
+                <Menu className="h-4 w-4" />
+                <span>Разделы</span>
+              </button>
               <button
                 onClick={() => {
                   setPaletteOpen(true);
@@ -517,6 +537,101 @@ export const Navbar: React.FC<NavbarProps> = ({
               </p>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ── Панель разделов для узких экранов ─────────────────────────── */}
+      {drawerOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setDrawerOpen(false)}
+            aria-hidden="true"
+          />
+          <aside
+            className="drawer-in relative flex h-full w-[286px] max-w-[86vw] flex-col border-r border-slate-800 bg-slate-950 px-3 py-4 shadow-2xl shadow-black/60"
+            aria-label="Разделы системы"
+          >
+            <div className="flex items-center justify-between gap-2 px-1">
+              <Brand onClick={() => goTo(visibleTabs[0]?.id ?? "dashboard")} />
+              <button
+                onClick={() => setDrawerOpen(false)}
+                aria-label="Закрыть разделы"
+                className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-800 hover:text-ink"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <button
+              onClick={() => {
+                setDrawerOpen(false);
+                setPaletteOpen(true);
+                setPaletteQuery("");
+                setPaletteIndex(0);
+              }}
+              className="mt-4 flex w-full items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-[11px] text-slate-400 transition hover:border-slate-700 hover:text-slate-200"
+            >
+              <Search className="h-3.5 w-3.5" />
+              <span className="flex-1 text-left">Перейти к разделу…</span>
+            </button>
+
+            <nav className="mt-4 flex-1 space-y-5 overflow-y-auto px-1 pb-2">
+              {navGroups.map((group) => (
+                <div key={group.label}>
+                  <p className="mb-1.5 px-3 text-[9.5px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    {group.label}
+                  </p>
+                  <div className="space-y-0.5">
+                    {group.items.map((tab) => {
+                      const Icon = tab.icon;
+                      const active = activeTab === tab.id;
+                      const unack = unackFor(tab);
+                      return (
+                        <button
+                          key={tab.id}
+                          onClick={() => goTo(tab.id)}
+                          aria-current={active ? "page" : undefined}
+                          className={`nav-item ${active ? "nav-item-active" : ""}`}
+                        >
+                          <Icon className="h-4 w-4 shrink-0" />
+                          <span className="min-w-0 flex-1 truncate">{tab.label}</span>
+                          {unack > 0 && (
+                            <span className="rounded-full bg-red-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-red-300">
+                              {unack > 99 ? "99+" : unack}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </nav>
+
+            <div className="space-y-1 border-t border-slate-800/80 px-1 pt-3">
+              <button onClick={openSettings} className="nav-item">
+                <Settings2 className="h-4 w-4 shrink-0" />
+                <span className="flex-1 text-left">Настройки интерфейса</span>
+              </button>
+              {can("users:manage") && (
+                <a href="/docs" target="_blank" rel="noreferrer" className="nav-item">
+                  <ExternalLink className="h-4 w-4 shrink-0" />
+                  <span className="flex-1 text-left">Swagger API</span>
+                </a>
+              )}
+              <button
+                onClick={() => {
+                  setDrawerOpen(false);
+                  logout();
+                }}
+                className="nav-item text-red-300 hover:bg-red-500/10 hover:text-red-200"
+              >
+                <LogOut className="h-4 w-4 shrink-0" />
+                <span className="flex-1 text-left">Выйти из системы</span>
+              </button>
+            </div>
+          </aside>
         </div>
       )}
 

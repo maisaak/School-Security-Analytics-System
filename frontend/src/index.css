@@ -582,3 +582,17 @@ html[data-theme="light"] .chip-live {
 .page-title-glow {
   text-shadow: 0 1px 0 rgb(0 0 0 / 0.25);
 }
+
+/* Выдвижная панель разделов на узких экранах */
+@keyframes drawer-in {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+.drawer-in {
+  animation: drawer-in 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drawer-in { animation: none; }
+}
