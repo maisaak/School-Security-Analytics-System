@@ -12,11 +12,17 @@ import cv2
 import numpy as np
 
 from app.core.config import settings
+from app.core.detector_profiles import normalize_profile
 from app.core.security import safe_delete_media_file
 from app.db.models import Violation
 from app.db.session import SessionLocal
 from app.models.detector import detector
+from app.services.event_bus import event_bus
+from app.services.hls import HlsPublisher
+from app.services.metrics import record_violation, set_cameras
+from app.services.notifier import notify_violation
 from app.services.simulator import RealisticCCTVSimulator
+from app.services.tracking import BagDwellMonitor
 
 
 def _resolve_ffmpeg_bin() -> str:
@@ -86,11 +92,29 @@ class CameraWorker(threading.Thread):
     TARGET_FPS = 12.0
     DETECT_EVERY_N_FRAMES = 3
 
-    def __init__(self, camera_id: int, name: str, rtsp_url: str, phase_offset: float = 0.0) -> None:
+    @property
+    def target_fps(self) -> float:
+        return float(settings.STREAM_TARGET_FPS or self.TARGET_FPS)
+
+    def __init__(
+        self,
+        camera_id: int,
+        name: str,
+        rtsp_url: str,
+        phase_offset: float = 0.0,
+        detector_profile: str | None = None,
+        policy: dict | None = None,
+    ) -> None:
         super().__init__(daemon=True)
         self.camera_id = camera_id
         self.name = name
         self.rtsp_url = rtsp_url
+        # Профиль детекции: какие модели YOLO прогоняются на кадрах этой камеры
+        self.detector_profile = normalize_profile(detector_profile or settings.DETECTOR_PROFILE)
+        # v3: зоны ROI, порог уверенности, расписание и A/B-профиль
+        self.policy: dict = policy or {}
+        self.current_variant: str = "A"
+        self.last_frame_monotonic: float = time.monotonic()
 
         self.stop_event = threading.Event()
         self.paused = False
@@ -106,13 +130,123 @@ class CameraWorker(threading.Thread):
         self.frame_buffer: deque[np.ndarray] = deque(maxlen=54)  # ~4.5 секунды видеофрагмента
         self.last_analysis: dict = {"violations": [], "safe_objects": [], "person_count": 0, "latency_ms": 0.0}
         self.last_violation_ts: dict[str, float] = {}
+        # ByteTrack-подобный трекер + таймер выдержки бесхозной сумки
+        self.bag_monitor = BagDwellMonitor() if settings.TRACKER_ENABLED else None
+        self.track_alert_ts: dict[str, float] = {}
 
         self.current_fps: float = 0.0
         self.stream_online: bool = False
         self.last_error: str | None = None
 
+        # HLS-публикатор: аннотированные кадры -> H.264/HLS для браузерного плеера
+        self.hls: HlsPublisher | None = (
+            HlsPublisher(camera_id=camera_id, fps=float(settings.STREAM_TARGET_FPS or self.TARGET_FPS))
+            if settings.HLS_ENABLED
+            else None
+        )
+
     def stop(self) -> None:
         self.stop_event.set()
+        if self.hls is not None:
+            self.hls.stop()
+            self.hls = None
+
+    def set_detector_profile(self, profile: str) -> None:
+        """Горячая смена моделей без перезапуска камеры."""
+        self.detector_profile = normalize_profile(profile)
+
+    def set_policy(self, policy: dict) -> None:
+        """Горячее применение зон/порогов/расписания без перезапуска потока."""
+        self.policy = policy or {}
+
+    # ── Политика камеры: зоны, порог, расписание, A/B ───────────────────────
+    @property
+    def zone_list(self) -> list[dict]:
+        zones = self.policy.get("zones") or []
+        return [z for z in zones if isinstance(z, dict) and len(z.get("points") or []) >= 3]
+
+    def effective_confidence(self) -> float:
+        raw = self.policy.get("confidence_threshold")
+        if raw is None:
+            return 0.0
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return 0.0
+        # Порог камеры может ужесточать, но не ослаблять глобальную политику
+        base = settings.WEAPON_CONFIDENCE_THRESHOLD
+        return max(0.0, min(max(value, base * 0.5), 0.99))
+
+    @staticmethod
+    def _point_in_polygon(points: list, cx: float, cy: float, width: int, height: int) -> bool:
+        poly = np.array([[float(p[0]) * width, float(p[1]) * height] for p in points], dtype=np.float32)
+        return cv2.pointPolygonTest(poly, (float(cx), float(cy)), False) >= 0
+
+    def _zone_name_for(self, bbox: list[int], frame_shape: tuple[int, ...]) -> tuple[bool, str | None]:
+        zones = self.zone_list
+        if not zones:
+            return True, None
+        height, width = frame_shape[0], frame_shape[1]
+        try:
+            x1, y1, x2, y2 = [float(v) for v in bbox[:4]]
+        except (TypeError, ValueError):
+            return True, None
+        cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        includes = [z for z in zones if (z.get("kind") or "include") == "include"]
+        excludes = [z for z in zones if (z.get("kind") or "include") == "exclude"]
+        for zone in excludes:
+            if self._point_in_polygon(zone.get("points") or [], cx, cy, width, height):
+                return False, zone.get("name")
+        if includes:
+            for zone in includes:
+                if self._point_in_polygon(zone.get("points") or [], cx, cy, width, height):
+                    return True, zone.get("name")
+            return False, None
+        return True, None
+
+    def _apply_camera_policy(self, analysis: dict, frame_shape: tuple[int, ...]) -> dict:
+        threshold = self.effective_confidence()
+        kept = []
+        for item in analysis.get("violations", []):
+            if threshold and float(item.get("confidence") or 0.0) < threshold:
+                continue
+            inside, zone_name = self._zone_name_for(item.get("bbox") or [], frame_shape)
+            if not inside:
+                continue
+            item["zone_name"] = zone_name if inside else None
+            kept.append(item)
+        analysis["violations"] = kept
+        return analysis
+
+    def _schedule_allows(self, now: datetime | None = None) -> bool:
+        schedule = self.policy.get("schedule") or {}
+        if not schedule.get("enabled"):
+            return True
+        moment = now or datetime.now()
+        days = schedule.get("days")
+        if isinstance(days, list) and days and moment.weekday() not in [int(d) for d in days if str(d).lstrip("-").isdigit()]:
+            return False
+        start = str(schedule.get("start") or "00:00")
+        end = str(schedule.get("end") or "23:59")
+        current = moment.strftime("%H:%M")
+        if start <= end:
+            return start <= current <= end
+        # Ночное окно (например, 20:00–07:00) переходит через полночь
+        return current >= start or current <= end
+
+    def _active_profile(self, frame_idx: int) -> str:
+        ab_profile = self.policy.get("ab_profile")
+        try:
+            share = int(self.policy.get("ab_share_pct") or 0)
+        except (TypeError, ValueError):
+            share = 0
+        if ab_profile and 0 < share < 100:
+            bucket = (frame_idx * 2654435761 + self.camera_id * 97) % 100
+            if bucket < share:
+                self.current_variant = "B"
+                return normalize_profile(ab_profile)
+        self.current_variant = "A"
+        return self.detector_profile
 
     def trigger_scenario(self, scenario: str) -> bool:
         if self.simulator is None:
@@ -129,6 +263,10 @@ class CameraWorker(threading.Thread):
         bbox: list[int],
         snapshot: np.ndarray,
         clip_frames: list[np.ndarray],
+        track_id: str | None = None,
+        dwell_seconds: float | None = None,
+        zone_name: str | None = None,
+        model_variant: str | None = None,
     ) -> None:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
         img_rel = f"snapshots/cam{self.camera_id}_{v_type}_{stamp}.jpg"
@@ -138,7 +276,7 @@ class CameraWorker(threading.Thread):
         vid_abs = settings.MEDIA_ROOT / vid_rel
 
         cv2.imwrite(str(img_abs), snapshot, [int(cv2.IMWRITE_JPEG_QUALITY), 88])
-        encode_h264_clip(clip_frames, vid_abs, fps=self.TARGET_FPS)
+        encode_h264_clip(clip_frames, vid_abs, fps=self.target_fps)
 
         db = SessionLocal()
         try:
@@ -149,9 +287,15 @@ class CameraWorker(threading.Thread):
                 bbox_json=json.dumps(bbox),
                 image_path=f"/media/{img_rel}",
                 video_path=f"/media/{vid_rel}",
+                track_id=track_id,
+                dwell_seconds=round(dwell_seconds, 2) if dwell_seconds is not None else None,
+                zone_name=zone_name,
+                model_variant=model_variant,
             )
             db.add(row)
             db.commit()
+            db.refresh(row)
+            incident_id = row.id
 
             # Ротация старых записей, чтобы диск не переполнялся при 24/7 работе
             total_count = db.query(Violation).count()
@@ -169,6 +313,10 @@ class CameraWorker(threading.Thread):
                 db.commit()
         finally:
             db.close()
+
+        # Уведомления и real-time лента — вне сессии БД, чтобы не блокировать запись
+        record_violation(v_type, f"cam{self.camera_id}")
+        notify_violation(incident_id)
 
     def _render_offline_placeholder(self, reason: str) -> bytes:
         canvas = np.zeros((540, 960, 3), dtype=np.uint8)
@@ -212,7 +360,7 @@ class CameraWorker(threading.Thread):
                         fps_counter = 0
                         fps_timer = now
 
-                    sleep_left = (1.0 / self.TARGET_FPS) - (time.monotonic() - loop_start)
+                    sleep_left = (1.0 / self.target_fps) - (time.monotonic() - loop_start)
                     if sleep_left > 0:
                         time.sleep(sleep_left)
                 continue
@@ -250,40 +398,90 @@ class CameraWorker(threading.Thread):
                     fps_counter = 0
                     fps_timer = now
 
-                sleep_left = (1.0 / self.TARGET_FPS) - (time.monotonic() - loop_start)
+                sleep_left = (1.0 / self.target_fps) - (time.monotonic() - loop_start)
                 if sleep_left > 0:
                     time.sleep(sleep_left)
 
             cap.release()
             time.sleep(1.0)
 
+    def _apply_dwell_tracking(self, analysis: dict, frame_shape: tuple[int, ...]) -> dict:
+        """
+        Заменяет «мгновенные» тревоги бесхозной сумки на подтверждённые трекером:
+        предмет должен стабильно (>= min_hits кадров) провисеть без владельца дольше dwell-таймера.
+        """
+        if self.bag_monitor is None:
+            return analysis
+        now = time.monotonic()
+        tracked = self.bag_monitor.update(
+            analysis.get("bags", []),
+            analysis.get("persons", []),
+            frame_shape,
+            now,
+        )
+        analysis["bag_tracks"] = tracked["states"]
+        analysis["bag_dwell_threshold"] = tracked["threshold_sec"]
+        analysis["violations"] = [
+            v for v in analysis.get("violations", []) if v.get("type") != "suspicious_bag"
+        ] + tracked["violations"]
+        analysis["confirmed_bag_tracks"] = {v.get("track_id") for v in tracked["violations"]}
+        return analysis
+
     def _process_single_frame(self, raw_frame: np.ndarray, frame_idx: int) -> None:
-        if frame_idx % self.DETECT_EVERY_N_FRAMES == 0:
-            self.last_analysis = detector.detect_frame(raw_frame)
+        if frame_idx % max(1, int(settings.DETECT_EVERY_N_FRAMES)) == 0:
+            profile = self._active_profile(frame_idx)
+            analysis = detector.detect_frame(raw_frame, profile=profile)
+            self.last_analysis = self._apply_dwell_tracking(analysis, raw_frame.shape)
+            self.last_analysis = self._apply_camera_policy(self.last_analysis, raw_frame.shape)
 
         annotated = detector.annotate_frame(raw_frame, self.last_analysis, camera_title=self.name)
         self.frame_buffer.append(annotated)
+        if self.hls is not None:
+            self.hls.push(annotated)
 
         ok, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
         if ok:
             self.latest_jpeg = buf.tobytes()
             self.latest_seq += 1
 
+        self.last_frame_monotonic = time.monotonic()
         now = time.monotonic()
+        schedule_allows = self._schedule_allows()
         for item in self.last_analysis.get("violations", []):
+            if not schedule_allows:
+                break
             v_type = item["type"]
-            if now - self.last_violation_ts.get(v_type, -999.0) >= settings.VIOLATION_COOLDOWN_SEC:
-                self.last_violation_ts[v_type] = now
-                snapshot_copy = annotated.copy()
-                clip_frames = list(self.frame_buffer)
-                # Если буфер ещё короткий (первые секунды старта), дублируем кадры до ~2 сек, чтобы плеер проигрывал плавно
-                while len(clip_frames) < 24:
-                    clip_frames.insert(0, snapshot_copy)
-                threading.Thread(
-                    target=self._save_incident,
-                    args=(v_type, item["confidence"], item["bbox"], snapshot_copy, clip_frames),
-                    daemon=True,
-                ).start()
+            track_id = item.get("track_id")
+            # Для бесхозных предметов кулдаун привязан к конкретному треку:
+            # разные сумки фиксируются независимо, а одна и та же — не чаще раза в N секунд.
+            cooldown_key = f"{v_type}:{track_id}" if track_id else v_type
+            if now - self.track_alert_ts.get(cooldown_key, -999.0) < settings.VIOLATION_COOLDOWN_SEC:
+                continue
+            if track_id is None and now - self.last_violation_ts.get(v_type, -999.0) < settings.VIOLATION_COOLDOWN_SEC:
+                continue
+
+            self.track_alert_ts[cooldown_key] = now
+            self.last_violation_ts[v_type] = now
+            snapshot_copy = annotated.copy()
+            clip_frames = list(self.frame_buffer)
+            # Если буфер ещё короткий (первые секунды старта), дублируем кадры до ~2 сек, чтобы плеер проигрывал плавно
+            while len(clip_frames) < 24:
+                clip_frames.insert(0, snapshot_copy)
+            threading.Thread(
+                target=self._save_incident,
+                args=(
+                    v_type,
+                    item["confidence"],
+                    item["bbox"],
+                    snapshot_copy,
+                    clip_frames,
+                    track_id,
+                    item.get("dwell_seconds"),
+                    item.get("zone_name"),
+                    self.current_variant,
+                ),
+                daemon=True,
+            ).start()
 
 
 class StreamManager:
@@ -291,16 +489,85 @@ class StreamManager:
         self._workers: dict[int, CameraWorker] = {}
         self._lock = threading.Lock()
 
-    def start_camera(self, camera_id: int, name: str, rtsp_url: str, is_active: bool = True) -> None:
+    def start_camera(
+        self,
+        camera_id: int,
+        name: str,
+        rtsp_url: str,
+        is_active: bool = True,
+        detector_profile: str | None = None,
+        policy: dict | None = None,
+    ) -> None:
         with self._lock:
             existing = self._workers.pop(camera_id, None)
             if existing:
                 existing.stop()
             offset = (camera_id * 8.5) % 26.0
-            worker = CameraWorker(camera_id=camera_id, name=name, rtsp_url=rtsp_url, phase_offset=offset)
+            worker = CameraWorker(
+                camera_id=camera_id,
+                name=name,
+                rtsp_url=rtsp_url,
+                phase_offset=offset,
+                detector_profile=detector_profile,
+                policy=policy,
+            )
             worker.paused = not is_active
             self._workers[camera_id] = worker
             worker.start()
+
+    def set_detector_profile(self, camera_id: int, profile: str) -> bool:
+        """Применяет новый профиль детекции к работающей камере на лету."""
+        worker = self._workers.get(camera_id)
+        if worker is None:
+            return False
+        worker.set_detector_profile(profile)
+        return True
+
+    def set_policy(self, camera_id: int, policy: dict) -> bool:
+        """Горячее обновление зон, порогов, расписания и A/B на работающей камере."""
+        worker = self._workers.get(camera_id)
+        if worker is None:
+            return False
+        worker.set_policy(policy)
+        return True
+
+    def restart_camera(self, camera_id: int) -> bool:
+        """Перезапуск потока с теми же параметрами (используется watchdog-ом)."""
+        worker = self._workers.get(camera_id)
+        if worker is None:
+            return False
+        self.start_camera(
+            camera_id=worker.camera_id,
+            name=worker.name,
+            rtsp_url=worker.rtsp_url,
+            is_active=not worker.paused,
+            detector_profile=worker.detector_profile,
+            policy=worker.policy,
+        )
+        return True
+
+    def last_frame_age(self, camera_id: int) -> float | None:
+        worker = self._workers.get(camera_id)
+        if worker is None:
+            return None
+        return max(0.0, time.monotonic() - worker.last_frame_monotonic)
+
+    def status_snapshot(self) -> list[dict]:
+        with self._lock:
+            workers = list(self._workers.values())
+        return [
+            {
+                "camera_id": worker.camera_id,
+                "name": worker.name,
+                "online": worker.stream_online and not worker.paused,
+                "paused": worker.paused,
+                "fps": worker.current_fps,
+                "last_frame_age_sec": round(max(0.0, time.monotonic() - worker.last_frame_monotonic), 1),
+                "variant": worker.current_variant,
+                "profile": worker.detector_profile,
+            }
+            for worker in workers
+        ]
 
     def set_paused(self, camera_id: int, paused: bool) -> None:
         worker = self._workers.get(camera_id)
@@ -342,7 +609,11 @@ class StreamManager:
                 "latency_ms": 0.0,
                 "person_count": 0,
                 "active_threats": [],
+                "bag_tracking": [],
                 "is_simulated": False,
+                "detector_profile": normalize_profile(settings.DETECTOR_PROFILE),
+                "stream_mode": "mjpeg",
+                "hls_ready": False,
             }
         return {
             "online": worker.stream_online and not worker.paused,
@@ -350,7 +621,11 @@ class StreamManager:
             "latency_ms": worker.last_analysis.get("latency_ms", 0.0),
             "person_count": worker.last_analysis.get("person_count", 0),
             "active_threats": [v["type"] for v in worker.last_analysis.get("violations", [])],
+            "bag_tracking": worker.last_analysis.get("bag_tracks", []),
             "is_simulated": worker.simulator is not None,
+            "detector_profile": worker.detector_profile,
+            "stream_mode": "hls" if (worker.hls is not None and worker.hls.ready()) else "mjpeg",
+            "hls_ready": bool(worker.hls is not None and worker.hls.ready()),
         }
 
     def stop_all(self) -> None:

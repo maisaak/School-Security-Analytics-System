@@ -1,0 +1,677 @@
+from __future__ import annotations
+
+import sys
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+
+import cv2
+import numpy as np
+import subprocess
+import sys
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
+
+from app.api.schemas import (
+    ModelCatalogOut,
+    ModelUploadResult,
+    ModelVersionOut,
+    RetrainJobOut,
+    RetrainRequest,
+    RollbackRequest,
+    SupportedArchitectureOut,
+)
+from app.api.serializers import serialize_job, serialize_version
+from app.core.auth import require_permissions
+from app.core.config import PROJECT_ROOT, settings
+from app.core.permissions import Permission
+from app.core.security import read_upload_limited, validate_dataset_yaml
+from app.db.models import Camera, ModelVersion, RetrainJob, User
+from app.db.session import get_db
+from app.models.detector import detector
+from app.services.audit import record_audit
+from app.services.hls import playlist_ready
+from app.services.model_registry import (
+    ARCHITECTURE_LABELS,
+    SUPPORTED_ARCHITECTURES,
+    activate_version,
+    current_production,
+    evaluate_validation_gate,
+    inspect_weights,
+    register_version,
+)
+from app.services.tasks import celery_app, execute_retrain_job, retrain_model_task
+
+router = APIRouter(prefix="/api/models", tags=["YOLOv8: дообучение и реестр версий"])
+RETRAIN_LOCK = threading.Lock()
+
+
+@router.get("/catalog", response_model=ModelCatalogOut)
+def model_catalog(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permissions(Permission.MODELS_VIEW)),
+):
+    """
+    Каталог YOLO-моделей для админ-панели.
+
+    Отдаёт три слоя:
+      1. components — реальные веса ансамбля (COCO, оружие, школьная модель):
+         файл, классы, порог уверенности, размер, статус загрузки;
+      2. profiles — готовые профили детекции и сколько камер на каждом;
+      3. versions — реестр версий весов с mAP@50, чтобы выбрать боевую модель.
+    """
+    camera_counts: dict[str, int] = {}
+    for cam in db.query(Camera).all():
+        key = cam.detector_profile or settings.DETECTOR_PROFILE
+        camera_counts[key] = camera_counts.get(key, 0) + 1
+
+    catalog = detector.describe_catalog(camera_counts)
+    production = current_production(db)
+    versions = db.query(ModelVersion).order_by(ModelVersion.id.desc()).limit(30).all()
+
+    return ModelCatalogOut(
+        components=catalog["components"],
+        profiles=catalog["profiles"],
+        supported_architectures=[
+            SupportedArchitectureOut(key=key, label=ARCHITECTURE_LABELS.get(key, key))
+            for key in SUPPORTED_ARCHITECTURES
+        ],
+        versions=[serialize_version(v, production.id if production else None) for v in versions],
+        production=serialize_version(production, production.id) if production else None,
+        active_weights=catalog["active_weights"],
+        reloaded_at=catalog["reloaded_at"],
+        hls={
+            "enabled": settings.HLS_ENABLED,
+            "segment_sec": settings.HLS_SEGMENT_SEC,
+            "max_segments": settings.HLS_MAX_SEGMENTS,
+            "ready_cameras": [
+                cam.id for cam in db.query(Camera).all() if playlist_ready(cam.id)
+            ],
+        },
+    )
+
+
+@router.get("/dataset")
+def get_dataset_info(_: User = Depends(require_permissions(Permission.MODELS_VIEW))):
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    from ml.datasets.generate_dataset import ensure_custom_dataset
+
+    return ensure_custom_dataset(PROJECT_ROOT)
+
+
+@router.post("/dataset/upload")
+async def upload_training_sample(
+    request: Request,
+    file: UploadFile = File(...),
+    violation_type: str = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permissions(Permission.MODELS_TRAIN)),
+):
+    if violation_type not in {"dog", "weapon", "suspicious_bag"}:
+        raise HTTPException(status_code=400, detail="Некорректный класс объекта")
+
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    from ml.datasets.generate_dataset import CLASS_MAP, ensure_custom_dataset, extract_foreground_rgba
+
+    ensure_custom_dataset(PROJECT_ROOT)
+
+    content = await read_upload_limited(file, max_bytes=settings.MAX_UPLOAD_IMAGE_MB * 1024 * 1024)
+    arr = np.frombuffer(content, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="Не удалось прочитать изображение")
+
+    img_resized = cv2.resize(img, (960, 540), interpolation=cv2.INTER_AREA)
+    an = detector.detect_frame(img_resized)
+    bbox = None
+    for v in an["violations"]:
+        if v["type"] == violation_type:
+            bbox = v["bbox"]
+            break
+    if bbox is None:
+        rgba = extract_foreground_rgba(img_resized)
+        ys, xs = np.where(rgba[:, :, 3] > 128)
+        if len(xs) > 50 and len(ys) > 50:
+            bbox = [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())]
+        else:
+            bbox = [144, 81, 816, 459]
+
+    x1, y1, x2, y2 = bbox
+    cx = ((x1 + x2) / 2.0) / 960.0
+    cy = ((y1 + y2) / 2.0) / 540.0
+    bw = max(0.05, (x2 - x1) / 960.0)
+    bh = max(0.05, (y2 - y1) / 540.0)
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+    ds_root = PROJECT_ROOT / "ml" / "datasets" / "custom"
+    img_out = ds_root / "images" / "train" / f"user_{violation_type}_{stamp}.jpg"
+    lbl_out = ds_root / "labels" / "train" / f"user_{violation_type}_{stamp}.txt"
+
+    cv2.imwrite(str(img_out), img_resized, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+    lbl_out.write_text(f"{CLASS_MAP[violation_type]} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n", encoding="utf-8")
+
+    record_audit(
+        db,
+        action="dataset.sample_upload",
+        request=request,
+        user=user,
+        entity_type="dataset",
+        entity_id=img_out.name,
+        detail={"violation_type": violation_type, "filename": file.filename, "bbox": bbox},
+    )
+
+    return {
+        "status": "added",
+        "filename": img_out.name,
+        "violation_type": violation_type,
+        "dataset": get_dataset_info(user),
+    }
+
+
+@router.get("/jobs", response_model=list[RetrainJobOut])
+def list_retrain_jobs(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permissions(Permission.MODELS_VIEW)),
+):
+    jobs = db.query(RetrainJob).order_by(RetrainJob.id.desc()).limit(25).all()
+    return [serialize_job(j) for j in jobs]
+
+
+@router.post("/retrain", response_model=RetrainJobOut)
+def retrain_model(
+    payload: RetrainRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permissions(Permission.MODELS_TRAIN)),
+):
+    safe_yaml = validate_dataset_yaml(payload.dataset_yaml)
+    rel_yaml = safe_yaml.relative_to(PROJECT_ROOT).as_posix()
+
+    with RETRAIN_LOCK:
+        active = db.query(RetrainJob).filter(RetrainJob.status.in_(["queued", "running"])).first()
+        if active:
+            raise HTTPException(status_code=409, detail=f"Задача дообучения #{active.id} уже выполняется")
+
+        production = current_production(db)
+        job = RetrainJob(
+            status="queued",
+            epochs=payload.epochs,
+            current_epoch=0,
+            dataset_yaml=rel_yaml,
+            details="Поставлена в очередь обучения",
+            requested_by=user.username,
+            baseline_map50=production.map50 if production else None,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+    record_audit(
+        db,
+        action="model.retrain.start",
+        request=request,
+        user=user,
+        entity_type="retrain_job",
+        entity_id=job.id,
+        detail={
+            "epochs": payload.epochs,
+            "dataset_yaml": rel_yaml,
+            "baseline_map50": job.baseline_map50,
+            "tolerance": settings.MAP50_ROLLBACK_TOLERANCE,
+        },
+    )
+
+    dispatched_celery = False
+    try:
+        import redis as redis_lib
+
+        r_client = redis_lib.from_url(settings.REDIS_URL, socket_connect_timeout=0.35, socket_timeout=0.35)
+        if r_client.ping():
+            workers = celery_app.control.inspect(timeout=0.4).active()
+            if workers:
+                retrain_model_task.delay(job.id, payload.epochs, rel_yaml)
+                dispatched_celery = True
+    except Exception:
+        dispatched_celery = False
+
+    if not dispatched_celery:
+        threading.Thread(
+            target=execute_retrain_job,
+            args=(job.id, payload.epochs, rel_yaml),
+            daemon=True,
+        ).start()
+
+    return serialize_job(db.query(RetrainJob).filter(RetrainJob.id == job.id).first())
+
+
+@router.post("/upload", response_model=ModelUploadResult)
+async def upload_custom_model(
+    request: Request,
+    file: UploadFile = File(...),
+    label: str = Form(""),
+    architecture: str = Form("auto"),
+    map50: float | None = Form(None),
+    activate: bool = Form(False),
+    notes: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permissions(Permission.MODELS_TRAIN)),
+):
+    """
+    Загрузка собственных обученных весов: YOLOv8, YOLO11, YOLOv10, YOLOv9 и др.
+
+    Файл проверяется Ultralytics до записи в реестр (битые и чужие чекпоинты
+    отсекаются), архитектура и классы определяются автоматически. Если указан
+    mAP@50 и включена активация, применяется тот же Validation Gate, что и для
+    дообучения: деградация относительно боевой версии блокируется.
+    """
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".pt"):
+        raise HTTPException(
+            status_code=415,
+            detail="Поддерживаются только веса Ultralytics в формате .pt (YOLOv8 / YOLO11 / YOLOv10 / YOLOv9)",
+        )
+
+    requested_arch = (architecture or "auto").strip().lower()
+    if requested_arch not in SUPPORTED_ARCHITECTURES:
+        raise HTTPException(
+            status_code=422,
+            detail="Неизвестная архитектура. Доступны: " + ", ".join(SUPPORTED_ARCHITECTURES),
+        )
+
+    content = await read_upload_limited(
+        file, max_bytes=settings.MAX_UPLOAD_MODEL_MB * 1024 * 1024
+    )
+    if len(content) < 1024:
+        raise HTTPException(status_code=400, detail="Файл весов слишком мал и не похож на чекпоинт")
+
+    settings.MODEL_VERSIONS_ROOT.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    safe_stem = "".join(ch for ch in Path(filename).stem if ch.isalnum() or ch in "-_")[:48] or "model"
+    staged = settings.MODEL_VERSIONS_ROOT / f"upload_{stamp}_{safe_stem}.pt"
+    staged.write_bytes(content)
+
+    try:
+        inspection = inspect_weights(staged)
+    except Exception as exc:
+        staged.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Не удалось прочитать веса: {exc.__class__.__name__}. Убедитесь, что это чекпоинт Ultralytics .pt",
+        ) from exc
+
+    if inspection["task"] != "detect":
+        staged.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=422,
+            detail=f"Модель задачи '{inspection['task']}' не подходит: система работает только с детекцией объектов",
+        )
+
+    detected_arch = inspection["architecture"]
+    if requested_arch != "auto" and detected_arch not in {"custom", requested_arch}:
+        staged.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Файл содержит веса {ARCHITECTURE_LABELS.get(detected_arch, detected_arch)}, "
+                f"а выбрана {ARCHITECTURE_LABELS.get(requested_arch, requested_arch)}. "
+                "Выберите «Определить автоматически» или укажите правильную архитектуру."
+            ),
+        )
+    final_arch = detected_arch if detected_arch != "custom" else (requested_arch if requested_arch != "auto" else "custom")
+
+    if len(inspection["classes"]) < 2:
+        staged.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=422,
+            detail="Модель должна детектировать хотя бы два класса (например, weapon и suspicious_bag)",
+        )
+
+    metrics: dict[str, float] = {}
+    normalized_map50: float | None = None
+    if map50 is not None:
+        normalized_map50 = round(map50 / 100.0, 4) if map50 > 1 else round(map50, 4)
+        if not 0.0 < normalized_map50 <= 1.0:
+            staged.unlink(missing_ok=True)
+            raise HTTPException(status_code=422, detail="mAP@50 должен быть в диапазоне 0–1 или 0–100%")
+        metrics["metrics/mAP50(B)"] = normalized_map50
+
+    version_label = (label or "").strip()[:80] or f"{safe_stem}-{stamp}"
+    version = register_version(
+        db,
+        weights_path=staged,
+        metrics=metrics,
+        label=version_label,
+        source="upload",
+        created_by=user.username,
+        status="candidate",
+        baseline=None,
+        architecture=final_arch,
+    )
+    version.validation_notes = notes.strip()[:400] or (
+        f"Загружено администратором {user.username}: {filename} · "
+        f"{ARCHITECTURE_LABELS.get(final_arch, final_arch)} · классов: {len(inspection['classes'])}"
+    )
+    # Реестр уже держит собственную копию весов — временный файл загрузки не нужен
+    try:
+        staged.unlink(missing_ok=True)
+    except OSError:
+        pass
+    db.commit()
+    db.refresh(version)
+
+    activated = False
+    gate_passed: bool | None = None
+    gate_notes = ""
+    message = "Модель добавлена в реестр как кандидат"
+
+    if normalized_map50 is None:
+        message = (
+            "Модель добавлена в реестр. mAP@50 не указан — автоматический Validation Gate "
+            "недоступен, активируйте версию вручную из реестра."
+        )
+    else:
+        gate_passed, gate_notes = evaluate_validation_gate(db, version)
+        version.validation_passed = gate_passed
+        version.validation_notes = f"{version.validation_notes} · {gate_notes}"
+        if activate and gate_passed:
+            activate_version(db, version, reason=f"Активация загруженных весов ({user.username})")
+            activated = True
+            message = "Модель прошла Validation Gate и назначена боевой"
+        elif activate and not gate_passed:
+            version.status = "rejected"
+            message = "Validation Gate не пропустил модель: боевые веса не изменены"
+        elif gate_passed:
+            message = "Модель проверена Validation Gate и ожидает активации"
+        else:
+            message = (
+                "Модель добавлена в реестр как кандидат, но Validation Gate не пропустил её: "
+                "активация заблокирована, боевые веса не изменены"
+            )
+        db.commit()
+        db.refresh(version)
+
+    record_audit(
+        db,
+        action="model.upload",
+        request=request,
+        user=user,
+        entity_type="model_version",
+        entity_id=version.id,
+        detail={
+            "filename": filename,
+            "label": version.label,
+            "architecture": final_arch,
+            "detected_architecture": detected_arch,
+            "classes": inspection["classes"],
+            "map50_provided": normalized_map50,
+            "gate_passed": gate_passed,
+            "activated": activated,
+            "size_bytes": version.size_bytes,
+        },
+    )
+
+    return ModelUploadResult(
+        version=serialize_version(version, version.id if activated else None),
+        inspection=inspection,
+        activated=activated,
+        gate_passed=gate_passed,
+        gate_notes=gate_notes,
+        message=message,
+    )
+
+
+@router.delete("/versions/{version_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_model_version(
+    version_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permissions(Permission.MODELS_ROLLBACK)),
+):
+    """Удаляет загруженную версию из реестра (боевую удалить нельзя — сначала откатитесь)."""
+    version = db.query(ModelVersion).filter(ModelVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="Версия не найдена")
+    if version.status == "production":
+        raise HTTPException(status_code=409, detail="Нельзя удалить боевую версию: сначала активируйте другую")
+
+    from app.services.model_registry import abs_path
+
+    weights = abs_path(version.weights_path)
+    label = version.label
+    db.delete(version)
+    db.commit()
+    try:
+        if weights.is_file():
+            weights.unlink()
+    except OSError:
+        pass
+
+    record_audit(
+        db,
+        action="model.version.delete",
+        request=request,
+        user=user,
+        entity_type="model_version",
+        entity_id=version_id,
+        detail={"label": label},
+    )
+    from fastapi import Response
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/versions", response_model=list[ModelVersionOut])
+def list_model_versions(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permissions(Permission.MODELS_VIEW)),
+):
+    versions = db.query(ModelVersion).order_by(ModelVersion.id.desc()).limit(50).all()
+    production = current_production(db)
+    return [serialize_version(v, production.id if production else None) for v in versions]
+
+
+@router.post("/versions/{version_id}/rollback", response_model=ModelVersionOut)
+def rollback_model_version(
+    version_id: int,
+    payload: RollbackRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permissions(Permission.MODELS_ROLLBACK)),
+):
+    """Откат на выбранную версию весов из реестра (например, если новая модель деградировала)."""
+    version = db.query(ModelVersion).filter(ModelVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="Версия весов не найдена")
+    if version.status == "production":
+        raise HTTPException(status_code=409, detail="Эта версия уже является боевой")
+    if version.validation_passed is False and not payload.force:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Версия отклонена Validation Gate (mAP@50 ниже базового). "
+                "Для принудительной активации передайте force=true."
+            ),
+        )
+
+    previous = current_production(db)
+    try:
+        version = activate_version(
+            db,
+            version,
+            reason=f"Откат администратором {user.username}: {payload.reason}",
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+
+    record_audit(
+        db,
+        action="model.rollback",
+        request=request,
+        user=user,
+        entity_type="model_version",
+        entity_id=version.id,
+        detail={
+            "reason": payload.reason,
+            "forced": payload.force,
+            "restored_version": version.label,
+            "previous_version": previous.label if previous else None,
+            "map50": version.map50,
+            "weights_path": version.weights_path,
+        },
+    )
+    return serialize_version(version, version.id)
+
+
+@router.get("/gate")
+def validation_gate_info(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permissions(Permission.MODELS_VIEW)),
+):
+    production = current_production(db)
+    rejected = (
+        db.query(ModelVersion)
+        .filter(ModelVersion.validation_passed.is_(False))
+        .order_by(ModelVersion.id.desc())
+        .limit(5)
+        .all()
+    )
+    return {
+        "tolerance": settings.MAP50_ROLLBACK_TOLERANCE,
+        "min_absolute_map50": settings.MAP50_MIN_ABSOLUTE,
+        "production": serialize_version(production, production.id if production else None) if production else None,
+        "recent_rejections": [
+            {
+                "id": v.id,
+                "label": v.label,
+                "map50": v.map50,
+                "baseline_map50": v.baseline_map50,
+                "notes": v.validation_notes,
+                "created_at": v.created_at,
+            }
+            for v in rejected
+        ],
+        "active_weights": detector.active_weights_name,
+        "active_map50": production.map50 if production else None,
+    }
+
+
+# ─── Экспорт весов в ONNX / TensorRT ────────────────────────────────────────
+
+EXPORT_FORMATS = {"onnx": "ONNX", "engine": "TensorRT engine"}
+
+
+def _exports_dir():
+    path = settings.MODEL_VERSIONS_ROOT / "exports"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+@router.get("/exports")
+def list_exports(_: User = Depends(require_permissions(Permission.MODELS_VIEW))):
+    items = []
+    for path in sorted(_exports_dir().glob("*"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if path.is_file():
+            items.append(
+                {
+                    "filename": path.name,
+                    "size_mb": round(path.stat().st_size / 1024**2, 2),
+                    "created_at": datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(timespec="seconds"),
+                    "download_url": f"/api/models/exports/{path.name}",
+                }
+            )
+    return {"formats": EXPORT_FORMATS, "items": items}
+
+
+@router.post("/versions/{version_id}/export")
+def export_version(
+    version_id: int,
+    request: Request,
+    format: str = Query(default="onnx", pattern="^(onnx|engine)$"),
+    imgsz: int = Query(default=640, ge=320, le=1280),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permissions(Permission.MODELS_ROLLBACK)),
+):
+    """
+    Экспорт выбранной версии весов через Ultralytics: ONNX для кроссплатформенного
+    инференса, TensorRT engine — для GPU-сервера школы. Операция тяжёлая, поэтому
+    вынесена в отдельный процесс с таймаутом 10 минут.
+    """
+    version = db.query(ModelVersion).filter(ModelVersion.id == version_id).first()
+    if version is None:
+        raise HTTPException(status_code=404, detail="Версия весов не найдена")
+    weights = (PROJECT_ROOT / version.weights_path).resolve()
+    try:
+        weights.relative_to(PROJECT_ROOT.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Некорректный путь весов") from exc
+    if not weights.is_file():
+        raise HTTPException(status_code=404, detail="Файл весов отсутствует на диске")
+
+    out_dir = _exports_dir()
+    code = (
+        "import sys\n"
+        "from ultralytics import YOLO\n"
+        "model = YOLO(sys.argv[1])\n"
+        "path = model.export(format=sys.argv[2], imgsz=int(sys.argv[3]), project=sys.argv[4], name='run', exist_ok=True)\n"
+        "print(path)\n"
+    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code, str(weights), format, str(imgsz), str(out_dir)],
+            capture_output=True,
+            timeout=600,
+            cwd=str(PROJECT_ROOT),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail="Экспорт занял больше 10 минут и был остановлен") from exc
+
+    if proc.returncode != 0:
+        tail = (proc.stderr or b"").decode("utf-8", errors="replace")[-1200:]
+        raise HTTPException(status_code=400, detail=f"Экспорт не удался: {tail or 'нет диагностики'}")
+
+    produced = None
+    target_suffix = ".onnx" if format == "onnx" else ".engine"
+    for path in sorted(out_dir.rglob("*"), key=lambda p: p.stat().st_mtime if p.is_file() else 0, reverse=True):
+        if path.is_file() and path.suffix == target_suffix:
+            produced = path
+            break
+    if produced is None:
+        raise HTTPException(status_code=500, detail="Экспорт завершился без файла результата")
+
+    record_audit(
+        db,
+        action="model.export",
+        request=request,
+        user=user,
+        entity_type="model_version",
+        entity_id=version.id,
+        detail={"format": format, "file": produced.name, "size_mb": round(produced.stat().st_size / 1024**2, 2)},
+    )
+    return {
+        "status": "exported",
+        "format": format,
+        "filename": produced.name,
+        "size_mb": round(produced.stat().st_size / 1024**2, 2),
+        "download_url": f"/api/models/exports/{produced.name}",
+        "version_id": version.id,
+    }
+
+
+@router.get("/exports/{filename}")
+def download_export(
+    filename: str,
+    _: User = Depends(require_permissions(Permission.MODELS_VIEW)),
+):
+    safe_name = Path(filename).name
+    path = (_exports_dir() / safe_name).resolve()
+    try:
+        path.relative_to(_exports_dir().resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Некорректное имя файла") from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Файл экспорта не найден")
+    return FileResponse(path, filename=safe_name, media_type="application/octet-stream")

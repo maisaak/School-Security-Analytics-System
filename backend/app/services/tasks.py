@@ -11,7 +11,8 @@ from celery import Celery
 from app.core.config import PROJECT_ROOT, settings
 from app.db.models import RetrainJob
 from app.db.session import SessionLocal
-from app.models.detector import detector
+from app.services.audit import record_audit
+from app.services.model_registry import map50_from_metrics, process_retrain_result
 
 celery_app = Celery(
     "school_security",
@@ -27,7 +28,12 @@ celery_app.conf.update(
 
 
 def execute_retrain_job(job_id: int, epochs: int, dataset_yaml: str) -> None:
+    """
+    Запускает дообучение YOLOv8 в отдельном процессе, пишет прогресс в БД и по завершении
+    прогоняет Validation Gate: в production попадают только веса с mAP@50 не ниже базового.
+    """
     db = SessionLocal()
+    staged_weights = settings.MODEL_VERSIONS_ROOT / f"staging_job{job_id}.pt"
     try:
         job = db.query(RetrainJob).filter(RetrainJob.id == job_id).first()
         if not job:
@@ -49,6 +55,8 @@ def execute_retrain_job(job_id: int, epochs: int, dataset_yaml: str) -> None:
             str(dataset_yaml),
             "--base",
             str(settings.YOLO_COCO_MODEL_PATH),
+            "--output",
+            str(staged_weights),
             "--json-progress",
         ]
 
@@ -95,26 +103,82 @@ def execute_retrain_job(job_id: int, epochs: int, dataset_yaml: str) -> None:
         if ret != 0 or final_summary is None:
             raise RuntimeError(" | ".join(tail_lines[-5:]))
 
-        detector.reload_custom_weights(final_summary["saved_weights"])
+        saved = Path(final_summary.get("saved_weights") or staged_weights)
+        if not saved.is_file():
+            raise RuntimeError("Процесс обучения не создал файл весов")
+
+        job = db.query(RetrainJob).filter(RetrainJob.id == job_id).first()
+        baseline = job.baseline_map50 if job else None
+
+        version, passed, notes = process_retrain_result(
+            db,
+            job_id=job_id,
+            staged_weights=saved,
+            metrics=final_summary.get("metrics", {}),
+            created_by=(job.requested_by if job else None) or "system",
+        )
+
+        final_map50 = map50_from_metrics(version.metrics_json and json.loads(version.metrics_json) or {})
 
         job = db.query(RetrainJob).filter(RetrainJob.id == job_id).first()
         if job:
-            job.status = "completed"
+            job.version_id = version.id
+            job.final_map50 = final_map50
+            job.baseline_map50 = version.baseline_map50 if version.baseline_map50 is not None else baseline
+            job.validation_passed = passed
             job.current_epoch = epochs
-            job.metrics_json = json.dumps(final_summary["metrics"])
-            map50 = final_summary["metrics"].get("metrics/mAP50(B)", 0.0)
-            job.details = f"Веса успешно обновлены ({Path(final_summary['saved_weights']).name}) · mAP@50 = {map50:.1%}"
+            job.metrics_json = json.dumps(json.loads(version.metrics_json or "{}"))
             job.completed_at = datetime.now(timezone.utc)
+            if passed:
+                job.status = "completed"
+                job.details = f"Версия {version.label} прошла Validation Gate и активна · {notes}"
+            else:
+                job.status = "rejected"
+                job.details = f"Версия {version.label} отклонена Validation Gate · {notes}"
             db.commit()
+
+        record_audit(
+            db,
+            action="model.version.promoted" if passed else "model.version.rejected",
+            actor_username="system",
+            actor_role="system",
+            entity_type="model_version",
+            entity_id=version.id,
+            outcome="success",
+            detail={
+                "job_id": job_id,
+                "version": version.label,
+                "map50": final_map50,
+                "baseline_map50": version.baseline_map50,
+                "validation_notes": notes,
+                "weights_path": version.weights_path,
+            },
+        )
     except Exception as exc:
         db.rollback()
         job = db.query(RetrainJob).filter(RetrainJob.id == job_id).first()
         if job:
             job.status = "failed"
             job.details = f"Ошибка обучения: {exc}"
+            job.validation_passed = False
             job.completed_at = datetime.now(timezone.utc)
             db.commit()
+        record_audit(
+            db,
+            action="model.retrain.failed",
+            actor_username="system",
+            actor_role="system",
+            entity_type="retrain_job",
+            entity_id=job_id,
+            outcome="failure",
+            detail={"error": str(exc)[:1500]},
+        )
     finally:
+        try:
+            if staged_weights.is_file():
+                staged_weights.unlink(missing_ok=True)
+        except OSError:
+            pass
         db.close()
 
 

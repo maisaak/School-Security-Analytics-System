@@ -1,49 +1,89 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Play, Plus, RefreshCw, X } from "lucide-react";
-import { api, Camera, DashboardStats, Violation } from "../api/client";
+import { AlertTriangle, CheckCircle2, Plus, RefreshCw, Video, X } from "lucide-react";
+import { api, Camera, DashboardStats, DetectorProfile, Violation } from "../api/client";
+import { useAuth } from "../auth/AuthContext";
 import { StatsOverview } from "../components/StatsOverview";
 import { CameraCard } from "../components/CameraCard";
 import { AddCameraModal } from "../components/AddCameraModal";
-import { VIOLATION_META, ViolationsTable } from "../components/ViolationsTable";
+import { CameraStream } from "../components/CameraStream";
+import { VIOLATION_META, ViolationFilters, ViolationsTable } from "../components/ViolationsTable";
+import { CameraPolicyModal } from "../components/CameraPolicyModal";
 import { VideoModal } from "../components/VideoModal";
+import { EmptyState, ErrorNotice, PageHeader, Pill } from "../components/ui";
 
 interface DashboardPageProps {
   onGlobalStatsUpdate: (stats: DashboardStats) => void;
 }
 
 export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdate }) => {
+  const { can } = useAuth();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [violations, setViolations] = useState<Violation[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
-  const [filterType, setFilterType] = useState("");
-  const [filterCameraId, setFilterCameraId] = useState<number | undefined>(undefined);
-  const [onlyUnack, setOnlyUnack] = useState(false);
+  const [filters, setFilters] = useState<ViolationFilters>({
+    type: "",
+    cameraId: undefined,
+    onlyUnack: false,
+    dateFrom: "",
+    dateTo: "",
+    falseAlarmOnly: false,
+    sort: "-detected_at",
+  });
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
+  const [total, setTotal] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [policyCamera, setPolicyCamera] = useState<Camera | null>(null);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [expandedCamera, setExpandedCamera] = useState<Camera | null>(null);
+  const [detectorProfiles, setDetectorProfiles] = useState<DetectorProfile[]>([]);
   const [activeVideo, setActiveVideo] = useState<Violation | null>(null);
   const [latestAlert, setLatestAlert] = useState<Violation | null>(null);
   const highestSeenId = useRef<number | null>(null);
 
+  const canSimulate = can("cameras:simulate");
+  const canManageCameras = can("cameras:manage");
+
+  useEffect(() => {
+    if (!canManageCameras) {
+      setDetectorProfiles([]);
+      return;
+    }
+    api
+      .getDetectorProfiles()
+      .then((res) => setDetectorProfiles(res.profiles))
+      .catch(() => setDetectorProfiles([]));
+  }, [canManageCameras]);
+
   const fetchAll = useCallback(async () => {
     try {
-      const [st, cams, viols] = await Promise.all([
+      const [st, cams, pageData] = await Promise.all([
         api.getStats(),
         api.getCameras(),
-        api.getViolations({
-          violation_type: filterType || undefined,
-          camera_id: filterCameraId,
-          unacknowledged_only: onlyUnack,
+        api.getViolationsPage({
+          violation_type: filters.type || undefined,
+          camera_id: filters.cameraId,
+          unacknowledged_only: filters.onlyUnack,
+          false_alarm: filters.falseAlarmOnly ? true : undefined,
+          date_from: filters.dateFrom || undefined,
+          date_to: filters.dateTo || undefined,
+          sort: filters.sort,
+          limit: pageSize,
+          offset: page * pageSize,
         }),
       ]);
       setStats(st);
       onGlobalStatsUpdate(st);
       setCameras(cams);
-      setViolations(viols);
+      setViolations(pageData.items);
+      setTotal(pageData.total);
+      setError(null);
 
-      if (viols.length > 0) {
-        const newest = viols[0];
+      if (pageData.items.length > 0) {
+        const newest = pageData.items[0];
         if (highestSeenId.current !== null && newest.id > highestSeenId.current) {
           setLatestAlert(newest);
         }
@@ -51,10 +91,10 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
           highestSeenId.current = newest.id;
         }
       }
-    } catch {
-      // retry silently on next interval
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось загрузить данные мониторинга");
     }
-  }, [filterType, filterCameraId, onlyUnack, onGlobalStatsUpdate]);
+  }, [filters, page, pageSize, onGlobalStatsUpdate]);
 
   useEffect(() => {
     fetchAll();
@@ -71,22 +111,94 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
     fetchAll();
   };
 
+  const handleToggleFalseAlarm = async (violation: Violation) => {
+    try {
+      await api.setFalseAlarm(violation.id, !violation.is_false_alarm);
+      setNotice(
+        violation.is_false_alarm
+          ? `Инцидент #${violation.id} снова считается реальной тревогой`
+          : `Инцидент #${violation.id} помечен как ложное срабатывание — учтён в отчёте по качеству`
+      );
+      fetchAll();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Не удалось обновить разметку");
+    }
+  };
+
+  const handleAddToDataset = async (violation: Violation) => {
+    try {
+      const result = await api.addViolationToDataset(violation.id);
+      setNotice(`Кадр #${violation.id} добавлен в датасет: ${result.filename}`);
+      fetchAll();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Не удалось добавить кадр в датасет");
+    }
+  };
+
+  const patchFilters = (patch: Partial<ViolationFilters>) => {
+    setFilters((current) => ({ ...current, ...patch }));
+    setPage(0);
+  };
+
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="Наблюдение"
+        title="Мониторинг и инциденты"
+        description="Видеостена реального времени, состояние камер и журнал нарушений с тревогами, аналитикой и выгрузкой улик."
+        icon={Video}
+        tone="brand"
+        meta={
+          <>
+            <Pill tone="emerald">
+              Камеры онлайн: {stats?.active_cameras ?? 0} / {stats?.total_cameras ?? 0}
+            </Pill>
+            <Pill tone={(stats?.unacknowledged_violations ?? 0) > 0 ? "amber" : "slate"}>
+              Неподтверждённых: {stats?.unacknowledged_violations ?? 0}
+            </Pill>
+            <Pill tone="slate">Всего нарушений: {stats?.total_violations ?? 0}</Pill>
+          </>
+        }
+        actions={
+          <div className="flex items-center gap-2">
+            <button
+              onClick={fetchAll}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-800 bg-slate-900 text-[11px] font-medium text-slate-300 transition hover:border-slate-700 hover:bg-slate-800"
+              title="Обновить данные"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Обновить
+            </button>
+            {can("cameras:manage") && (
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-3.5 py-2 text-xs font-medium text-white shadow-sm shadow-brand-900/40 transition hover:bg-brand-500"
+              >
+                <Plus className="w-4 h-4" />
+                Добавить камеру
+              </button>
+            )}
+          </div>
+        }
+      />
+
       {latestAlert && (
-        <div className="bg-red-950/80 border border-red-500/50 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4 shadow-lg">
+        <div className="tinted-red bg-red-950/80 border border-red-500/50 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-lg">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-xl bg-red-500/20 text-red-300">
               <AlertTriangle className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-white">
+              <p className="text-xs sm:text-sm font-semibold text-ink">
                 Новое срабатывание YOLOv8:{" "}
                 {VIOLATION_META[latestAlert.violation_type]?.title ?? latestAlert.violation_type}
               </p>
-              <p className="text-xs text-red-200/80">
-                {latestAlert.camera_name} ({latestAlert.camera_location}) · Уверенность{" "}
+              <p className="text-[11px] text-red-200/80">
+                {latestAlert.camera_name} ({latestAlert.camera_location}) · уверенность{" "}
                 {(latestAlert.confidence * 100).toFixed(1)}%
+                {latestAlert.track_id ? ` · трек ${latestAlert.track_id}` : ""}
+                {latestAlert.dwell_seconds !== null
+                  ? ` · выдержка ${latestAlert.dwell_seconds.toFixed(1)} с`
+                  : ""}
               </p>
             </div>
           </div>
@@ -97,14 +209,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
                 setActiveVideo(latestAlert);
                 setLatestAlert(null);
               }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-xs font-semibold text-white transition"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-[11px] font-semibold text-white transition"
             >
-              <Play className="w-3.5 h-3.5" />
               Открыть видеозапись
             </button>
             <button
               onClick={() => setLatestAlert(null)}
-              className="p-2 rounded-lg text-red-300 hover:text-white"
+              className="p-2 rounded-lg text-red-300 hover:text-ink"
             >
               <X className="w-4 h-4" />
             </button>
@@ -112,45 +223,69 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
         </div>
       )}
 
+      {error && <ErrorNotice message={error} onRetry={fetchAll} />}
+
+      {notice && (
+        <div className="rounded-xl border border-brand-500/40 bg-brand-500/10 px-3 py-2 flex items-start justify-between gap-2">
+          <p className="text-[11px] text-brand-200 flex items-center gap-1.5">
+            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> {notice}
+          </p>
+          <button onClick={() => setNotice(null)} className="text-brand-300 hover:text-ink">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       <StatsOverview stats={stats} />
 
       <section className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h2 className="text-lg font-semibold text-white">Видеостена реального времени</h2>
-            <p className="text-xs text-slate-400">
-              Потоковый мониторинг камер школы с автоматической классификацией объектов и проверкой бесхозных сумок
+            <h2 className="text-base font-semibold tracking-tight text-ink">Видеостена реального времени</h2>
+            <p className="text-[11px] text-slate-400">
+              RTSP → HLS (H.264) с детекцией поверх кадра · MJPEG-фолбэк · трекинг бесхозных предметов с таймером выдержки
             </p>
           </div>
-
-          <div className="flex items-center gap-2.5">
-            <button
-              onClick={fetchAll}
-              className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300 transition"
-              title="Обновить данные"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-sm font-medium text-white transition shadow-sm"
-            >
-              <Plus className="w-4 h-4" />
-              Добавить камеру
-            </button>
-          </div>
+          <span className="chip chip-live">потоки активны</span>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+        {cameras.length === 0 && !error && (
+          <EmptyState
+            icon={Video}
+            title="Камеры ещё не подключены"
+            description="Добавьте RTSP-поток или включите тестовую камеру — видеостена и журнал нарушений появятся автоматически."
+            action={
+              can("cameras:manage") ? (
+                <button
+                  onClick={() => setShowAddModal(true)}
+                  className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-3.5 py-2 text-xs font-medium text-white transition hover:bg-brand-500"
+                >
+                  <Plus className="w-4 h-4" /> Добавить камеру
+                </button>
+              ) : undefined
+            }
+          />
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {cameras.map((cam) => (
             <CameraCard
               key={cam.id}
               camera={cam}
+              canManage={canManageCameras}
+              canSimulate={canSimulate}
+              detectorProfiles={detectorProfiles}
+              onDetectorChange={async (id, profile) => {
+                await api.setCameraDetector(id, profile);
+                fetchAll();
+              }}
+              dwellThreshold={stats?.tracking.dwell_threshold_sec ?? 6}
               onToggle={async (id) => {
                 await api.toggleCamera(id);
                 fetchAll();
               }}
               onDelete={async (id) => {
+                if (!window.confirm("Удалить камеру и все её улики?")) return;
                 await api.deleteCamera(id);
                 fetchAll();
               }}
@@ -158,6 +293,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
                 await api.simulateEvent(id, scenario);
               }}
               onExpand={setExpandedCamera}
+              onOpenPolicy={setPolicyCamera}
             />
           ))}
         </div>
@@ -166,55 +302,79 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
       <ViolationsTable
         violations={violations}
         cameras={cameras}
-        filterType={filterType}
-        filterCameraId={filterCameraId}
-        onlyUnack={onlyUnack}
-        onChangeType={setFilterType}
-        onChangeCamera={setFilterCameraId}
-        onChangeUnack={setOnlyUnack}
+        filters={filters}
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        canAck={can("violations:ack")}
+        canDelete={can("violations:delete")}
+        canTrain={can("violations:train")}
+        onChangeType={(value) => patchFilters({ type: value })}
+        onChangeCamera={(cameraId) => patchFilters({ cameraId })}
+        onChangeUnack={(value) => patchFilters({ onlyUnack: value })}
+        onChangeFilters={patchFilters}
+        onPageChange={setPage}
+        onPageSizeChange={setPageSize}
         onOpenVideo={setActiveVideo}
         onAcknowledge={handleAcknowledge}
         onDelete={async (id) => {
+          if (!window.confirm("Удалить запись и медиафайлы без возможности восстановления?")) return;
           await api.deleteViolation(id);
           fetchAll();
         }}
+        onToggleFalseAlarm={handleToggleFalseAlarm}
+        onAddToDataset={handleAddToDataset}
       />
 
-      <AddCameraModal
-        open={showAddModal}
-        onClose={() => setShowAddModal(false)}
-        onSubmit={async (payload) => {
-          await api.addCamera(payload);
-          await fetchAll();
-        }}
-      />
+      {policyCamera && (
+        <CameraPolicyModal
+          camera={policyCamera}
+          profiles={detectorProfiles}
+          onClose={() => setPolicyCamera(null)}
+          onSaved={fetchAll}
+        />
+      )}
+
+      {can("cameras:manage") && (
+        <AddCameraModal
+          open={showAddModal}
+          onClose={() => setShowAddModal(false)}
+          onSubmit={async (payload) => {
+            await api.addCamera(payload);
+            await fetchAll();
+          }}
+        />
+      )}
 
       <VideoModal
         violation={activeVideo}
+        canAck={can("violations:ack")}
         onClose={() => setActiveVideo(null)}
         onAcknowledge={handleAcknowledge}
       />
 
       {expandedCamera && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-5xl w-full p-4 space-y-3">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-5xl w-full p-3 sm:p-4 space-y-3">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="font-semibold text-white">{expandedCamera.name}</h3>
-                <p className="text-xs text-slate-400">{expandedCamera.location}</p>
+                <h3 className="font-semibold text-ink text-sm">{expandedCamera.name}</h3>
+                <p className="text-[11px] text-slate-400">{expandedCamera.location}</p>
               </div>
               <button
                 onClick={() => setExpandedCamera(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-ink hover:bg-slate-800"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <img
-              src={`/api/cameras/${expandedCamera.id}/stream`}
-              alt={expandedCamera.name}
-              className="w-full rounded-xl bg-black aspect-video object-contain"
-            />
+            <div className="w-full rounded-xl bg-black aspect-video overflow-hidden">
+              <CameraStream
+                camera={expandedCamera}
+                showSwitch={false}
+                className="w-full h-full object-contain"
+              />
+            </div>
           </div>
         </div>
       )}

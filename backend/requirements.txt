@@ -12,6 +12,16 @@ ultralytics>=8.3.0
 celery>=5.4.0
 redis>=5.1.1
 python-multipart>=0.0.12
+PyJWT>=2.9.0
 imageio-ffmpeg>=0.5.1
 httpx>=0.27.2
+requests>=2.32.0
 pytest>=8.3.3
+
+# v3: отчёты, метрики, миграции
+reportlab>=4.2.0
+openpyxl>=3.1.5
+prometheus-client>=0.21.0
+alembic>=1.13.0
+# Опционально: мониторинг ошибок (включается переменной SENTRY_DSN)
+# sentry-sdk>=2.20.0

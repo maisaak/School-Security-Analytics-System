@@ -1,16 +1,169 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import hmac
 import ipaddress
+import re
+import secrets
 import socket
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from typing import Any
+from urllib.parse import urlparse, urlunparse
+import jwt
 from fastapi import Depends, HTTPException, Query, Request, UploadFile, status
 from fastapi.security import APIKeyHeader
 
 from app.core.config import PROJECT_ROOT, settings
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+PBKDF2_ITERATIONS = 210_000
+_PASSWORD_SCHEME = "pbkdf2_sha256"
+
+
+# ─── Хеширование паролей (PBKDF2-HMAC-SHA256, без внешних зависимостей) ──────
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), PBKDF2_ITERATIONS)
+    return f"{_PASSWORD_SCHEME}${PBKDF2_ITERATIONS}${salt}${digest.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        scheme, iterations, salt, digest_hex = (stored or "").split("$", 3)
+        if scheme != _PASSWORD_SCHEME:
+            return False
+        digest = hashlib.pbkdf2_hmac(
+            "sha256", password.encode("utf-8"), salt.encode("utf-8"), int(iterations)
+        )
+        return hmac.compare_digest(digest.hex(), digest_hex)
+    except (ValueError, TypeError):
+        return False
+
+
+def password_strength_error(password: str) -> str | None:
+    """
+    Политика паролей школы: длина >= 10, строчная и заглавная буквы, цифра.
+
+    Демо-учётки создаются в обход проверки (это явно помеченные временные
+    аккаунты для проверки системы), но любые новые и изменяемые пароли —
+    только по политике.
+    """
+    value = password or ""
+    if len(value) < settings.PASSWORD_MIN_LENGTH:
+        return f"Пароль должен содержать минимум {settings.PASSWORD_MIN_LENGTH} символов"
+    if len(value) > 128:
+        return "Пароль слишком длинный (максимум 128 символов)"
+    if not any(ch.islower() for ch in value):
+        return "Пароль должен содержать строчные буквы"
+    if not any(ch.isupper() for ch in value):
+        return "Пароль должен содержать заглавные буквы"
+    if not any(ch.isdigit() for ch in value):
+        return "Пароль должен содержать хотя бы одну цифру"
+    if value.lower() in {"password123", "qwerty12345", "admin12345", "school12345"}:
+        return "Пароль слишком простой: выберите другую комбинацию"
+    return None
+
+
+# ─── JWT access-токены ───────────────────────────────────────────────────────
+
+def create_access_token(
+    subject: str,
+    *,
+    username: str,
+    role: str,
+    extra: dict[str, Any] | None = None,
+    expires_minutes: int | None = None,
+) -> tuple[str, datetime]:
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(minutes=expires_minutes or settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    payload: dict[str, Any] = {
+        "sub": subject,
+        "username": username,
+        "role": role,
+        "iat": int(now.timestamp()),
+        "exp": int(expires_at.timestamp()),
+        "jti": secrets.token_urlsafe(12),
+        "iss": "school-security-analytics",
+    }
+    if extra:
+        payload.update(extra)
+    token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    return token, expires_at
+
+
+def decode_access_token(token: str) -> dict[str, Any]:
+    return jwt.decode(
+        token,
+        settings.JWT_SECRET_KEY,
+        algorithms=[settings.JWT_ALGORITHM],
+        options={"require": ["exp", "sub"]},
+    )
+
+
+# ─── Маскирование секретов (rtsp://user:pass@host) ───────────────────────────
+
+_SECRET_KEYS = re.compile(
+    r"(pass(?:word)?|pwd|secret|token|api[_-]?key|authorization|cookie|jwt)",
+    re.IGNORECASE,
+)
+
+
+def mask_stream_url(raw_url: str | None) -> str:
+    """
+    Скрывает логин/пароль в URL потока перед отдачей на фронтенд или в журнал аудита:
+    rtsp://admin:SuperPass@10.0.0.5:554/live -> rtsp://admin:***@10.0.0.5:554/live
+    Логин сохраняется частично (первый символ), чтобы администратор понимал, чья это учётка.
+    """
+    if not raw_url:
+        return raw_url or ""
+    try:
+        parsed = urlparse(raw_url)
+    except ValueError:
+        return "***"
+    if not parsed.netloc or "@" not in parsed.netloc:
+        return raw_url
+
+    userinfo, _, hostport = parsed.netloc.rpartition("@")
+    if ":" in userinfo:
+        user, _, _password = userinfo.partition(":")
+    else:
+        user, _password = userinfo, ""
+
+    masked_user = f"{user[0]}***" if user else "***"
+    masked_netloc = f"{masked_user}:***@{hostport}"
+    return urlunparse(parsed._replace(netloc=masked_netloc))
+
+
+def redact_secrets(value: Any) -> Any:
+    """Рекурсивно вычищает пароли/токены из структур перед записью в AuditLog."""
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+        for key, item in value.items():
+            if _SECRET_KEYS.search(str(key)):
+                cleaned[key] = "***"
+            elif isinstance(key, str) and key.lower() in {"rtsp_url", "stream_url", "source_url", "url"}:
+                cleaned[key] = mask_stream_url(item) if isinstance(item, str) else item
+            else:
+                cleaned[key] = redact_secrets(item)
+        return cleaned
+    if isinstance(value, (list, tuple)):
+        return [redact_secrets(v) for v in value]
+    if isinstance(value, str) and "://" in value and "@" in value:
+        return mask_stream_url(value)
+    return value
+
+
+def redact_text(text: str) -> str:
+    """Маскирует учётные данные вида scheme://user:pass@host внутри произвольного текста."""
+    return re.sub(
+        r"([a-zA-Z][a-zA-Z0-9+.-]*://)([^/\s:@]+):([^/\s@]+)@",
+        lambda m: f"{m.group(1)}{m.group(2)[:1]}***:***@",
+        text or "",
+    )
 
 ALLOWED_SIM_SOURCES = {"sim://entrance", "sim://hallway", "sim://courtyard", "demo://school-entrance"}
 ALLOWED_SCHEMES = {"rtsp", "rtsps", "http", "https"}

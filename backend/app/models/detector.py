@@ -14,6 +14,13 @@ from ultralytics import YOLO
 torch.set_num_threads(2)
 
 from app.core.config import PROJECT_ROOT, settings
+from app.core.detector_profiles import (
+    COMPONENT_LABELS,
+    COMPONENT_ORDER,
+    normalize_profile,
+    profile_catalog,
+    profile_components,
+)
 
 
 def _load_unicode_font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -122,6 +129,70 @@ class ViolationDetector:
         if mtime > self._custom_mtime:
             self.reload_custom_weights(custom_path)
 
+    # ── Каталог моделей для админ-панели ─────────────────────────────────────
+    def _component_entry(self, role: str, model, path: Path, conf: float, imgsz: int) -> dict:
+        exists = path.is_file()
+        classes: list[str] = []
+        architecture = "yolov8"
+        if model is not None:
+            try:
+                classes = sorted({str(v) for v in dict(model.names).values()})
+            except Exception:
+                classes = []
+            try:
+                from app.services.model_registry import detect_architecture
+
+                architecture = detect_architecture(model)
+            except Exception:
+                architecture = "custom"
+        return {
+            "role": role,
+            "label": COMPONENT_LABELS.get(role, role),
+            "filename": path.name,
+            "exists": exists,
+            "loaded": model is not None,
+            "size_bytes": path.stat().st_size if exists else 0,
+            "classes": classes,
+            "confidence_threshold": conf,
+            "imgsz": imgsz,
+            "architecture": architecture,
+        }
+
+    def describe_components(self) -> list[dict]:
+        """Состав ансамбля: какие веса реально загружены и что они умеют детектировать."""
+        with self._lock:
+            return [
+                self._component_entry(
+                    "coco",
+                    self.coco_model,
+                    Path(settings.YOLO_COCO_MODEL_PATH),
+                    settings.CONFIDENCE_THRESHOLD,
+                    480,
+                ),
+                self._component_entry(
+                    "weapon",
+                    self.weapon_model,
+                    Path(settings.YOLO_WEAPON_MODEL_PATH),
+                    settings.WEAPON_CONFIDENCE_THRESHOLD,
+                    480,
+                ),
+                self._component_entry(
+                    "custom",
+                    self.custom_model,
+                    Path(settings.YOLO_CUSTOM_MODEL_PATH),
+                    settings.CUSTOM_CONFIDENCE_THRESHOLD,
+                    416,
+                ),
+            ]
+
+    def describe_catalog(self, camera_counts: dict[str, int] | None = None) -> dict:
+        return {
+            "components": self.describe_components(),
+            "profiles": profile_catalog(camera_counts),
+            "active_weights": self.active_weights_name,
+            "reloaded_at": self.reloaded_at,
+        }
+
     def reload_custom_weights(self, weights_path: str | Path | None = None) -> None:
         target = Path(weights_path) if weights_path else Path(settings.YOLO_CUSTOM_MODEL_PATH)
         if not target.is_absolute():
@@ -136,8 +207,20 @@ class ViolationDetector:
             self.active_weights_name = target.name
             self.reloaded_at = datetime.now().isoformat(timespec="seconds")
 
-    def detect_frame(self, frame: np.ndarray) -> dict:
+    def detect_frame(self, frame: np.ndarray, profile: str = "ensemble") -> dict:
+        """
+        Прогон кадра через выбранный профиль детекции.
+
+        profile: ключ из DETECTOR_PROFILES (ensemble | custom | custom_weapon | coco | weapon).
+        Набор реально запускаемых моделей определяется профилем — админ может
+        снизить нагрузку на CPU, оставив только нужные детекторы.
+        """
         self._maybe_reload_from_disk()
+        components = profile_components(profile)
+        use_coco = "coco" in components
+        use_weapon = "weapon" in components and self.weapon_model is not None
+        use_custom = "custom" in components and self.custom_model is not None
+
         t0 = time.perf_counter()
         h, w = frame.shape[:2]
         diag = math.hypot(w, h)
@@ -148,12 +231,16 @@ class ViolationDetector:
         weapon_candidates: list[tuple[float, list[int]]] = []
 
         with self._lock:
-            coco_res = self.coco_model.predict(
-                frame,
-                imgsz=480,
-                conf=settings.CONFIDENCE_THRESHOLD,
-                verbose=False,
-            )[0]
+            coco_res = (
+                self.coco_model.predict(
+                    frame,
+                    imgsz=480,
+                    conf=settings.CONFIDENCE_THRESHOLD,
+                    verbose=False,
+                )[0]
+                if use_coco
+                else None
+            )
             weapon_res = (
                 self.weapon_model.predict(
                     frame,
@@ -161,7 +248,7 @@ class ViolationDetector:
                     conf=settings.WEAPON_CONFIDENCE_THRESHOLD,
                     verbose=False,
                 )[0]
-                if self.weapon_model is not None
+                if use_weapon
                 else None
             )
             custom_res = (
@@ -171,11 +258,11 @@ class ViolationDetector:
                     conf=settings.CUSTOM_CONFIDENCE_THRESHOLD,
                     verbose=False,
                 )[0]
-                if self.custom_model is not None
+                if use_custom
                 else None
             )
 
-        for box in coco_res.boxes:
+        for box in (coco_res.boxes if coco_res is not None else []):
             cls_id = int(box.cls[0])
             label = str(coco_res.names.get(cls_id, "")).lower()
             conf = float(box.conf[0])
@@ -267,6 +354,11 @@ class ViolationDetector:
             "safe_objects": safe_objects,
             "person_count": len(person_boxes),
             "latency_ms": latency_ms,
+            # Сырые кандидаты для трекера ByteTrack / таймера выдержки бесхозной сумки
+            "bags": [{"confidence": round(c, 4), "bbox": b} for c, b in bag_candidates],
+            "persons": [{"confidence": round(c, 4), "bbox": b} for c, b in person_boxes],
+            "profile": normalize_profile(profile),
+            "components_used": [c for c in COMPONENT_ORDER if c in components],
         }
 
     def annotate_frame(
@@ -277,6 +369,21 @@ class ViolationDetector:
     ) -> np.ndarray:
         canvas = frame.copy()
         h, w = canvas.shape[:2]
+
+        # Состояние трекинга бесхозных предметов: таймер выдержки до подтверждения тревоги
+        dwell_threshold = float(analysis.get("bag_dwell_threshold") or settings.UNATTENDED_DWELL_SEC)
+        for state in analysis.get("bag_tracks", []):
+            if state.get("state") == "unattended":
+                continue  # уже подтверждённая тревога рисуется ниже как violation
+            x1, y1, x2, y2 = state["bbox"]
+            dashed = (11, 158, 245)
+            step = 14
+            for x in range(x1, max(x1 + 1, x2), step * 2):
+                cv2.line(canvas, (x, y1), (min(x + step, x2), y1), dashed, 2)
+                cv2.line(canvas, (x, y2), (min(x + step, x2), y2), dashed, 2)
+            for y in range(y1, max(y1 + 1, y2), step * 2):
+                cv2.line(canvas, (x1, y), (x1, min(y + step, y2)), dashed, 2)
+                cv2.line(canvas, (x2, y), (x2, min(y + step, y2)), dashed, 2)
 
         # Тонкие уголки и рамки в стиле профессиональных NVR-систем
         for obj in analysis.get("safe_objects", []):
@@ -326,6 +433,17 @@ class ViolationDetector:
             fill = (16, 120, 88, 215) if obj["kind"] == "attended_bag" else (15, 118, 110, 195)
             draw.rounded_rectangle((x1, by, x1 + tw + 14, by + th + 8), radius=5, fill=fill)
             draw.text((x1 + 7, by + 3), txt, font=FONT_BADGE, fill=(255, 255, 255, 255))
+
+        for state in analysis.get("bag_tracks", []):
+            if state.get("state") == "unattended":
+                continue
+            x1, y1, _, _ = state["bbox"]
+            txt = f"ВЫДЕРЖКА {state.get('dwell_seconds', 0):.1f} / {dwell_threshold:.0f} c"
+            tb = draw.textbbox((0, 0), txt, font=FONT_BADGE)
+            tw, th = tb[2] - tb[0], tb[3] - tb[1]
+            by = max(4, y1 - th - 10)
+            draw.rounded_rectangle((x1, by, x1 + tw + 12, by + th + 8), radius=5, fill=(150, 96, 10, 220))
+            draw.text((x1 + 6, by + 3), txt, font=FONT_BADGE, fill=(255, 245, 220, 255))
 
         for viol in analysis.get("violations", []):
             vtype = viol["type"]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -21,10 +22,50 @@ def _resolve_repo_path(p: Path) -> Path:
     return cand_root
 
 
+def _load_or_create_jwt_secret() -> str:
+    """Стабильный секрет JWT для dev-режима, если он не задан через .env / переменные окружения."""
+    secret_file = PROJECT_ROOT / ".jwt_secret"
+    if secret_file.is_file():
+        value = secret_file.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+    value = secrets.token_urlsafe(48)
+    try:
+        secret_file.write_text(value, encoding="utf-8")
+        secret_file.chmod(0o600)
+    except OSError:
+        pass
+    return value
+
+
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "School Security Analytics System"
+    PROJECT_NAME: str = "Аналитика безопасности школы"
+    APP_VERSION: str = "2.1.0"
+
     DATABASE_URL: str = f"sqlite:///{(PROJECT_ROOT / 'school_security.db').as_posix()}"
     REDIS_URL: str = "redis://localhost:6379/0"
+
+    # ── Аутентификация и сессии ───────────────────────────────────────────────
+    JWT_SECRET_KEY: str = ""
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 12 * 60
+    AUTH_COOKIE_NAME: str = "school_session"
+    # Дублировать токен в теле ответа логина: нужно для превью/iframe, где браузер
+    # блокирует сторонние cookie. В строгом production можно выключить.
+    AUTH_RETURN_TOKEN_IN_BODY: bool = True
+    COOKIE_SECURE: bool = False
+    COOKIE_SAMESITE: str = "lax"
+    DEMO_LOGIN_ENABLED: bool = True
+    LOGIN_RATE_LIMIT_ATTEMPTS: int = 12
+    LOGIN_RATE_LIMIT_WINDOW_SEC: int = 300
+
+    # ── Демо-аккаунты (создаются при первом старте, флаг is_demo=True) ────────
+    DEMO_ADMIN_USERNAME: str = "admin"
+    DEMO_ADMIN_PASSWORD: str = "admin123"
+    DEMO_DIRECTOR_USERNAME: str = "director"
+    DEMO_DIRECTOR_PASSWORD: str = "director123"
+    DEMO_GUARD_USERNAME: str = "guard"
+    DEMO_GUARD_PASSWORD: str = "guard123"
 
     API_KEY: str = ""
     CORS_ORIGINS: list[str] = ["*"]
@@ -33,17 +74,81 @@ class Settings(BaseSettings):
 
     MAX_UPLOAD_IMAGE_MB: int = 15
     MAX_UPLOAD_VIDEO_MB: int = 60
+    # Лимит загрузки собственных весов YOLO (.pt), МБ
+    MAX_UPLOAD_MODEL_MB: int = 200
     MAX_STORED_VIOLATIONS: int = 250
+
+    # ── Эксплуатация и хранение улик ────────────────────────────────────────
+    # Политика хранения медиа: срок жизни записей и квота диска (ГБ).
+    RETENTION_DAYS: int = 30
+    RETENTION_MAX_GB: float = 5.0
+    RETENTION_AUTO_CLEAN: bool = True
+    RETENTION_INTERVAL_SEC: int = 900
+    BACKUP_DIR: Path = PROJECT_ROOT / "backups"
+    BACKUP_KEEP: int = 14
+
+    # ── Watchdog камер ─────────────────────────────────────────────────────
+    WATCHDOG_ENABLED: bool = True
+    WATCHDOG_INTERVAL_SEC: int = 8
+    WATCHDOG_STALE_SEC: float = 12.0
+
+    # ── SLA реакции охраны ─────────────────────────────────────────────────
+    SLA_TARGET_SEC: int = 60
+    SCHOOL_START_TIME: str = "08:30"
+    LATE_GRACE_MIN: int = 5
+
+    # ── Уведомления (Telegram) ─────────────────────────────────────────────
+    TELEGRAM_ENABLED: bool = False
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_DIRECTOR_CHAT_ID: str = ""
+    TELEGRAM_GUARD_CHAT_ID: str = ""
+    TELEGRAM_POLL_SEC: float = 2.0
+
+    # ── Безопасность учётных записей ───────────────────────────────────────
+    PASSWORD_MIN_LENGTH: int = 10
+    LOGIN_LOCKOUT_ATTEMPTS: int = 5
+    LOGIN_LOCKOUT_MINUTES: int = 15
+    TOTP_ISSUER: str = "Аналитика безопасности школы"
+
+    # ── Наблюдаемость ──────────────────────────────────────────────────────
+    METRICS_ENABLED: bool = True
+    SENTRY_DSN: str = ""
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.0
 
     YOLO_COCO_MODEL_PATH: Path = PROJECT_ROOT / "ml" / "models" / "yolov8n.pt"
     YOLO_WEAPON_MODEL_PATH: Path = PROJECT_ROOT / "ml" / "models" / "weapon_yolov8.pt"
     YOLO_CUSTOM_MODEL_PATH: Path = PROJECT_ROOT / "ml" / "models" / "school_security_best.pt"
 
+    # ── Реестр версий весов и Validation Gate ────────────────────────────────
+    MODEL_VERSIONS_ROOT: Path = PROJECT_ROOT / "ml" / "versions"
+    MAP50_ROLLBACK_TOLERANCE: float = 0.01
+    MAP50_MIN_ABSOLUTE: float = 0.35
+
     CONFIDENCE_THRESHOLD: float = 0.42
     WEAPON_CONFIDENCE_THRESHOLD: float = 0.50
     CUSTOM_CONFIDENCE_THRESHOLD: float = 0.52
     UNATTENDED_DISTANCE_RATIO: float = 0.22
+
+    # ── Трекинг и таймер выдержки бесхозной сумки (ByteTrack-подобный) ────────
+    TRACKER_ENABLED: bool = True
+    TRACK_IOU_THRESHOLD: float = 0.25
+    TRACK_MAX_AGE_SEC: float = 3.0
+    TRACK_MIN_HITS: int = 2
+    UNATTENDED_DWELL_SEC: float = 6.0
+    BAG_RELEASE_GRACE_SEC: float = 1.5
     VIOLATION_COOLDOWN_SEC: int = 12
+    STREAM_TARGET_FPS: float = 12.0
+    DETECT_EVERY_N_FRAMES: int = 3
+    # Профиль детекции по умолчанию для камер без явного выбора администратора
+    DETECTOR_PROFILE: str = "ensemble"
+
+    # ── HLS-трансляция (вместо MJPEG) ─────────────────────────────────────────
+    # Аннотированные кадры кодируются в H.264 и отдаются браузеру как HLS:
+    # для RTSP-камер это даёт нормальный видеоплеер, а не перерисовку <img>.
+    HLS_ENABLED: bool = True
+    HLS_SEGMENT_SEC: float = 1.0
+    HLS_MAX_SEGMENTS: int = 6
+    HLS_VIDEO_CODEC: str = "libx264"
 
     MEDIA_ROOT: Path = PROJECT_ROOT / "media"
 
@@ -62,6 +167,13 @@ settings.YOLO_COCO_MODEL_PATH = _resolve_repo_path(settings.YOLO_COCO_MODEL_PATH
 settings.YOLO_WEAPON_MODEL_PATH = _resolve_repo_path(settings.YOLO_WEAPON_MODEL_PATH)
 settings.YOLO_CUSTOM_MODEL_PATH = _resolve_repo_path(settings.YOLO_CUSTOM_MODEL_PATH)
 settings.MEDIA_ROOT = _resolve_repo_path(settings.MEDIA_ROOT)
+settings.MODEL_VERSIONS_ROOT = _resolve_repo_path(settings.MODEL_VERSIONS_ROOT)
+settings.BACKUP_DIR = _resolve_repo_path(settings.BACKUP_DIR)
 
-for sub in ("snapshots", "videos", "uploads"):
+if not (settings.JWT_SECRET_KEY or "").strip():
+    settings.JWT_SECRET_KEY = _load_or_create_jwt_secret()
+
+for sub in ("snapshots", "videos", "uploads", "hls"):
     (settings.MEDIA_ROOT / sub).mkdir(parents=True, exist_ok=True)
+settings.MODEL_VERSIONS_ROOT.mkdir(parents=True, exist_ok=True)
+settings.BACKUP_DIR.mkdir(parents=True, exist_ok=True)

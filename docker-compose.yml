@@ -36,12 +36,17 @@ services:
       YOLO_COCO_MODEL_PATH: /app/ml/models/yolov8n.pt
       YOLO_WEAPON_MODEL_PATH: /app/ml/models/weapon_yolov8.pt
       YOLO_CUSTOM_MODEL_PATH: /app/ml/models/school_security_best.pt
+      MODEL_VERSIONS_ROOT: /app/ml/versions
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      DEMO_LOGIN_ENABLED: ${DEMO_LOGIN_ENABLED:-true}
       MEDIA_ROOT: /app/media
     ports:
       - "8000:8000"
     volumes:
       - ./media:/app/media
       - ./ml:/app/ml
+      - ./ml/versions:/app/ml/versions
     depends_on:
       db:
         condition: service_healthy
@@ -61,10 +66,15 @@ services:
       YOLO_COCO_MODEL_PATH: /app/ml/models/yolov8n.pt
       YOLO_WEAPON_MODEL_PATH: /app/ml/models/weapon_yolov8.pt
       YOLO_CUSTOM_MODEL_PATH: /app/ml/models/school_security_best.pt
+      MODEL_VERSIONS_ROOT: /app/ml/versions
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      DEMO_LOGIN_ENABLED: ${DEMO_LOGIN_ENABLED:-true}
       MEDIA_ROOT: /app/media
     volumes:
       - ./media:/app/media
       - ./ml:/app/ml
+      - ./ml/versions:/app/ml/versions
     depends_on:
       db:
         condition: service_healthy
