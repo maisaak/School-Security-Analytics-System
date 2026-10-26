@@ -1,112 +1,118 @@
-from __future__ import annotations
-
 import io
-import time
+
 import cv2
-from fastapi.testclient import TestClient
+import numpy as np
+import pytest
 
 from app.core.config import PROJECT_ROOT, settings
-from app.main import app
+from app.db.models import Camera, Violation
+from app.db.session import SessionLocal
 
 
-def test_security_guards_and_full_pipeline():
-    with TestClient(app) as client:
-        # 1. Healthcheck и начальные сидированные камеры
-        assert client.get("/health").status_code == 200
-        initial_cams = client.get("/api/cameras").json()
-        assert len(initial_cams) >= 3
+def image_bytes():
+    return cv2.imencode(".jpg", np.zeros((100, 100, 3), dtype=np.uint8))[1].tobytes()
 
-        # 2. Проверка блокировки SSRF (loopback / metadata) и LFI (произвольный локальный путь)
-        lfi_attempt = client.post(
-            "/api/cameras",
-            json={"name": "Evil LFI", "location": "Test", "rtsp_url": "/etc/passwd"},
-        )
-        assert lfi_attempt.status_code == 400
 
-        ssrf_attempt = client.post(
-            "/api/cameras",
-            json={"name": "Evil SSRF", "location": "Test", "rtsp_url": "http://169.254.169.254/latest/meta-data"},
-        )
-        assert ssrf_attempt.status_code == 400
+def upload(client, save=False):
+    return client.post("/api/analyze/upload", files={"file": ("sample.jpg", image_bytes(), "image/jpeg")}, data={"save_violation": str(save).lower()})
 
-        loopback_attempt = client.post(
-            "/api/cameras",
-            json={"name": "Evil Loopback", "location": "Test", "rtsp_url": "http://127.0.0.1:8000/health"},
-        )
-        assert loopback_attempt.status_code == 400
 
-        # 3. Проверка блокировки Path Traversal в dataset_yaml при дообучении
-        traversal_retrain = client.post(
-            "/api/models/retrain",
-            json={"epochs": 1, "dataset_yaml": "../../etc/passwd"},
-        )
-        assert traversal_retrain.status_code == 400
+def test_clean_start_has_no_demo_metrics_or_cameras(client):
+    assert client.get("/health").status_code == 200
+    assert client.get("/api/cameras").json() == []
+    assert client.get("/api/models/jobs").json() == []
+    assert client.get("/api/models/dataset").json()["total_images"] == 0
 
-        # 4. Добавление легитимной камеры (POST /api/cameras)
-        add_res = client.post(
-            "/api/cameras",
-            json={
-                "name": "Камера №4 — Спортивный зал",
-                "location": "Блок Б, 1 этаж",
-                "rtsp_url": "sim://hallway",
-            },
-        )
-        assert add_res.status_code == 201
-        cam_id = add_res.json()["id"]
 
-        # 5. Симуляция инцидента и реальная детекция YOLOv8 + генерация MP4
-        sim_res = client.post(f"/api/cameras/{cam_id}/simulate", json={"scenario": "dog"})
-        assert sim_res.status_code == 200
+def test_api_and_media_require_authentication(client):
+    result = upload(client).json()
+    client.headers.pop("X-API-Key")
+    assert client.get("/api/cameras").status_code == 401
+    assert client.get(result["result_url"]).status_code == 401
+    assert client.get("/api/cameras?api_key=" + settings.API_KEY).status_code == 401
 
-        found_violation = None
-        for _ in range(25):
-            time.sleep(0.3)
-            viols = client.get("/api/violations").json()
-            if viols:
-                found_violation = viols[0]
-                break
-        assert found_violation is not None
 
-        # 6. Проверка отдачи H.264 MP4 видео нарушения
-        vid_res = client.get(found_violation["video_url"])
-        assert vid_res.status_code == 200
-        assert vid_res.headers["content-type"].startswith("video/mp4")
-        assert len(vid_res.content) > 1000
+def test_browser_session_and_csrf(client):
+    client.headers.pop("X-API-Key")
+    assert client.post("/api/auth/login", json={"api_key": settings.API_KEY}).status_code == 403
+    headers = {"X-Requested-With": "SchoolSecurity"}
+    result = client.post("/api/auth/login", json={"api_key": settings.API_KEY}, headers=headers)
+    assert result.status_code == 200
+    assert "HttpOnly" in result.headers["set-cookie"]
+    assert "SameSite=strict" in result.headers["set-cookie"]
+    assert client.get("/api/cameras").status_code == 200
+    assert client.post("/api/cameras", json={"name": "Demo", "rtsp_url": "sim://hallway"}).status_code == 403
+    assert client.post("/api/cameras", json={"name": "Demo", "rtsp_url": "sim://hallway"}, headers=headers).status_code == 201
+    assert client.post("/api/auth/logout", headers=headers).status_code == 200
+    assert client.get("/api/cameras").status_code == 401
 
-        # 7. Подтверждение и удаление инцидента с проверкой очистки медиафайлов с диска
-        ack_res = client.patch(f"/api/violations/{found_violation['id']}/ack")
-        assert ack_res.status_code == 200
-        assert ack_res.json()["is_acknowledged"] is True
 
-        snap_disk = settings.MEDIA_ROOT / found_violation["image_path"].removeprefix("/media/")
-        assert snap_disk.is_file()
-        del_viol = client.delete(f"/api/violations/{found_violation['id']}")
-        assert del_viol.status_code == 204
-        assert not snap_disk.exists()
+@pytest.mark.parametrize("source", ["/etc/passwd", "file:///etc/passwd", "http://169.254.169.254/latest", "http://127.0.0.1:8000", "http://[::1]", "rtsp://redis:6379", "sim://invalid"])
+def test_unsafe_camera_sources_rejected(client, source):
+    assert client.post("/api/cameras", json={"name": "Test", "rtsp_url": source}).status_code == 400
 
-        # 8. Проверка лимита размера загружаемого файла (защита от OOM DoS)
-        prev_limit = settings.MAX_UPLOAD_IMAGE_MB
-        settings.MAX_UPLOAD_IMAGE_MB = 1
-        try:
-            oversized = b"x" * (2 * 1024 * 1024)
-            too_big_res = client.post(
-                "/api/analyze/upload",
-                files={"file": ("huge.jpg", io.BytesIO(oversized), "image/jpeg")},
-            )
-            assert too_big_res.status_code == 413
-        finally:
-            settings.MAX_UPLOAD_IMAGE_MB = prev_limit
 
-        # 9. Проверка реальной детекции YOLOv8 на загруженном фото
-        sample_img = cv2.imread(str(PROJECT_ROOT / "ml" / "assets" / "sprites" / "dog_white.png"))
-        _, encoded = cv2.imencode(".jpg", sample_img)
-        up_res = client.post(
-            "/api/analyze/upload",
-            files={"file": ("test_dog.jpg", io.BytesIO(encoded.tobytes()), "image/jpeg")},
-            data={"save_violation": "false"},
-        )
-        assert up_res.status_code == 200
-        assert any(v["type"] == "dog" for v in up_res.json()["violations"])
+def test_camera_validation_and_secret_redaction(client, monkeypatch):
+    monkeypatch.setattr(settings, "CAMERA_ALLOWED_HOSTS", ["192.168.1.20"])
+    assert client.post("/api/cameras", json={"name": "  ", "rtsp_url": "sim://hallway"}).status_code == 422
+    response = client.post("/api/cameras", json={"name": "  Real camera  ", "rtsp_url": "rtsp://user:secret@192.168.1.20/stream?token=secret"})
+    assert response.status_code == 201
+    assert "secret" not in response.text
+    assert response.json()["name"] == "Real camera"
+    assert client.post(f"/api/cameras/{response.json()['id']}/toggle").json()["is_active"] is False
+    assert client.delete(f"/api/cameras/{response.json()['id']}").status_code == 204
 
-        # 10. Удаление камеры
-        assert client.delete(f"/api/cameras/{cam_id}").status_code == 204
+
+def test_real_cameras_require_allowlist(client):
+    assert client.post("/api/cameras", json={"name": "Camera", "rtsp_url": "rtsp://192.168.1.30/live"}).status_code == 400
+
+
+def test_lab_not_attributed_to_surveillance_camera(client):
+    cam = client.post("/api/cameras", json={"name": "Entrance", "rtsp_url": "sim://entrance"}).json()
+    result = upload(client, True)
+    assert result.status_code == 200
+    rows = client.get("/api/violations").json()
+    assert len(rows) == 1
+    assert rows[0]["camera_id"] != cam["id"]
+    assert "Лаборатория" in rows[0]["camera_name"]
+    assert rows[0]["video_url"] == ""
+    assert client.get(result.json()["result_url"]).status_code == 200
+    assert len(client.get("/api/cameras").json()) == 1
+
+
+def test_acknowledgement_idempotent_and_shared_media_preserved(client):
+    result = upload(client, True).json()
+    with SessionLocal() as db:
+        row = db.query(Violation).first()
+        copy = Violation(camera_id=row.camera_id, violation_type="weapon", confidence=.8, image_path=row.image_path)
+        db.add(copy)
+        db.commit()
+        copy_id = copy.id
+    row_id = result["saved_violation_ids"][0]
+    for _ in range(2):
+        assert client.patch(f"/api/violations/{row_id}/ack").json()["is_acknowledged"] is True
+    assert client.delete(f"/api/violations/{row_id}").status_code == 204
+    assert client.get(result["result_url"]).status_code == 200
+    assert client.delete(f"/api/violations/{copy_id}").status_code == 204
+    assert client.get(result["result_url"]).status_code == 404
+
+
+def test_upload_limits_and_invalid_images(client, monkeypatch):
+    monkeypatch.setattr(settings, "MAX_UPLOAD_IMAGE_MB", 1)
+    assert client.post("/api/analyze/upload", files={"file": ("huge.jpg", b"x" * (2 * 1024 * 1024))}).status_code == 413
+    assert client.post("/api/analyze/upload", files={"file": ("invalid.jpg", b"not an image")}).status_code == 400
+    assert client.post("/api/analyze/upload", files={"file": ("invalid.exe", b"binary")}).status_code == 415
+
+
+def test_training_requires_actual_labels_and_data(client):
+    assert client.post("/api/models/dataset/upload", files={"file": ("img.jpg", image_bytes())}, data={"violation_type": "dog"}).status_code == 422
+    assert client.post("/api/models/dataset/upload", files={"file": ("img.jpg", image_bytes())}, data={"violation_type": "dog", "bbox": "[0.5,0.5,0.2,0.3]"}).status_code == 422
+    assert client.post("/api/models/retrain", json={"epochs": 1}).status_code == 422
+    assert client.post("/api/models/retrain", json={"dataset_yaml": "../../etc/passwd"}).status_code == 400
+    assert client.post("/api/models/jobs/999/activate").status_code == 409
+    assert client.get("/api/models/jobs").json() == []
+
+
+def test_pagination_bounds(client):
+    assert client.get("/api/violations?limit=-1").status_code == 422
+    assert client.get("/api/violations?offset=-1").status_code == 422

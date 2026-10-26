@@ -56,3 +56,27 @@ class RetrainJob(Base):
     details = Column(Text, default="")
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class Employee(Base):
+    __tablename__ = "employees"
+    id = Column(Integer, primary_key=True)
+    username = Column(String(64), unique=True, nullable=False, index=True)
+    display_name = Column(String(120), nullable=False)
+    password_hash = Column(Text, nullable=False)
+    role = Column(String(20), nullable=False, default="viewer")
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class AccessSession(Base):
+    __tablename__ = "access_sessions"
+    token_hash = Column(String(64), primary_key=True)
+    employee_id = Column(Integer, ForeignKey("employees.id", ondelete="CASCADE"), nullable=True, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class AppSetting(Base):
+    __tablename__ = "app_settings"
+    key = Column(String(128), primary_key=True)
+    value = Column(Text, nullable=False)

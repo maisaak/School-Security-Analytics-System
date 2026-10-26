@@ -2,154 +2,108 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
+import shutil
 import threading
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
 import cv2
-import numpy as np
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.api.schemas import (
-    CameraCreate,
-    CameraOut,
-    RetrainJobOut,
-    RetrainRequest,
-    SimulateRequest,
-    ViolationOut,
-)
+from app.api.schemas import CameraCreate, CameraOut, RetrainJobOut, RetrainRequest, SimulateRequest, ViolationOut
 from app.core.config import PROJECT_ROOT, settings
-from app.core.security import (
-    read_upload_limited,
-    safe_delete_media_file,
-    validate_dataset_yaml,
-    validate_stream_source,
-    verify_api_key,
-)
+from app.core.security import read_upload_sync, redact_stream_url, safe_delete_media_file, validate_dataset_yaml, validate_stream_source, verify_api_key, require_admin
 from app.db.models import Camera, RetrainJob, Violation
 from app.db.session import get_db
 from app.models.detector import detector
-from app.services.stream_manager import encode_h264_clip, stream_manager
+from app.services.media_analysis import analyze_media, decode_image
+from app.services.stream_manager import stream_manager
 from app.services.tasks import celery_app, execute_retrain_job, retrain_model_task
+from ml.datasets.generate_dataset import CLASS_MAP, get_dataset_stats
+from ml.dataset_validation import validate_dataset
 
 router = APIRouter(prefix="/api", dependencies=[Depends(verify_api_key)])
 RETRAIN_LOCK = threading.Lock()
+CAMERA_LOCK = threading.Lock()
+DATASET_LOCK = threading.Lock()
 
 
 def _serialize_camera(cam: Camera) -> CameraOut:
-    tel = stream_manager.get_telemetry(cam.id)
-    return CameraOut(
-        id=cam.id,
-        name=cam.name,
-        location=cam.location,
-        rtsp_url=cam.rtsp_url,
-        is_active=cam.is_active,
-        created_at=cam.created_at,
-        **tel,
-    )
+    return CameraOut(id=cam.id, name=cam.name, location=cam.location, rtsp_url=redact_stream_url(cam.rtsp_url), is_active=cam.is_active, created_at=cam.created_at, **stream_manager.get_telemetry(cam.id))
 
 
 def _serialize_violation(v: Violation) -> ViolationOut:
-    try:
-        bbox = json.loads(v.bbox_json or "[]")
-    except Exception:
-        bbox = []
-    return ViolationOut(
-        id=v.id,
-        camera_id=v.camera_id,
-        camera_name=v.camera.name if v.camera else f"Камера #{v.camera_id}",
-        camera_location=v.camera.location if v.camera else "Архив",
-        violation_type=v.violation_type,
-        confidence=v.confidence,
-        bbox=bbox,
-        image_path=v.image_path,
-        video_url=f"/api/violations/{v.id}/video",
-        is_acknowledged=v.is_acknowledged,
-        detected_at=v.detected_at,
-    )
+    return ViolationOut(id=v.id, camera_id=v.camera_id, camera_name=v.camera.name if v.camera else "Архив", camera_location=v.camera.location if v.camera else "Архив", violation_type=v.violation_type, confidence=v.confidence, bbox=json.loads(v.bbox_json or "[]"), image_path=v.image_path, video_url=f"/api/violations/{v.id}/video" if v.video_path else "", is_acknowledged=v.is_acknowledged, detected_at=v.detected_at.replace(tzinfo=timezone.utc) if v.detected_at.tzinfo is None else v.detected_at)
 
 
 def _serialize_job(job: RetrainJob) -> RetrainJobOut:
-    try:
-        metrics = {k: float(v) for k, v in json.loads(job.metrics_json or "{}").items()}
-    except Exception:
-        metrics = {}
-    pct = 100 if job.status == "completed" else int(round((job.current_epoch / max(1, job.epochs)) * 100))
-    return RetrainJobOut(
-        id=job.id,
-        status=job.status,
-        epochs=job.epochs,
-        current_epoch=job.current_epoch,
-        progress_pct=min(100, max(0, pct)),
-        dataset_yaml=job.dataset_yaml,
-        metrics=metrics,
-        details=job.details or "",
-        created_at=job.created_at,
-        completed_at=job.completed_at,
-    )
+    done = job.status in {"completed", "ready", "active"}
+    return RetrainJobOut(id=job.id, status=job.status, epochs=job.epochs, current_epoch=job.current_epoch, progress_pct=100 if done else min(100, round(job.current_epoch / max(1, job.epochs) * 100)), dataset_yaml=job.dataset_yaml, metrics=json.loads(job.metrics_json or "{}"), details=job.details or "", created_at=job.created_at, completed_at=job.completed_at)
 
 
-# ─── Камеры ───────────────────────────────────────────────────────────────────
-
-@router.post("/cameras", response_model=CameraOut, status_code=status.HTTP_201_CREATED)
-def add_camera(payload: CameraCreate, db: Session = Depends(get_db)):
-    validated_url = validate_stream_source(payload.rtsp_url)
-    cam = Camera(
-        name=payload.name.strip(),
-        location=payload.location.strip() or "Периметр школы",
-        rtsp_url=validated_url,
-        is_active=True,
-    )
-    db.add(cam)
+def _delete_incidents(rows: list[Violation], db: Session) -> None:
+    paths = {path for row in rows for path in (row.image_path, row.video_path) if path}
+    for row in rows:
+        db.delete(row)
+    db.flush()
+    # Several detections may share one upload/clip. Do not break remaining records.
+    unused = [p for p in paths if not db.query(Violation.id).filter((Violation.image_path == p) | (Violation.video_path == p)).first()]
     db.commit()
-    db.refresh(cam)
-    stream_manager.start_camera(cam.id, cam.name, cam.rtsp_url, is_active=True)
+    for path in unused:
+        safe_delete_media_file(path)
+
+
+@router.post("/cameras", response_model=CameraOut, status_code=201)
+def add_camera(payload: CameraCreate, db: Session = Depends(get_db)):
+    source = validate_stream_source(payload.rtsp_url)
+    with CAMERA_LOCK:
+        if db.query(Camera).filter(Camera.rtsp_url != "lab://uploads").count() >= settings.MAX_CAMERAS:
+            raise HTTPException(status_code=409, detail="Достигнут лимит камер")
+        cam = Camera(name=payload.name, location=payload.location or "Периметр школы", rtsp_url=source, is_active=True)
+        db.add(cam)
+        db.commit()
+        db.refresh(cam)
+        stream_manager.start_camera(cam.id, cam.name, cam.rtsp_url)
     return _serialize_camera(cam)
 
 
 @router.get("/cameras", response_model=list[CameraOut])
 def list_cameras(db: Session = Depends(get_db)):
-    cams = db.query(Camera).order_by(Camera.id.asc()).all()
-    return [_serialize_camera(c) for c in cams]
+    return [_serialize_camera(c) for c in db.query(Camera).filter(Camera.rtsp_url != "lab://uploads").order_by(Camera.id).all()]
 
 
 @router.post("/cameras/{camera_id}/toggle", response_model=CameraOut)
 def toggle_camera(camera_id: int, db: Session = Depends(get_db)):
-    cam = db.query(Camera).filter(Camera.id == camera_id).first()
-    if not cam:
+    cam = db.get(Camera, camera_id)
+    if not cam or cam.rtsp_url == "lab://uploads":
         raise HTTPException(status_code=404, detail="Камера не найдена")
     cam.is_active = not cam.is_active
     db.commit()
-    db.refresh(cam)
-    stream_manager.set_paused(cam.id, paused=not cam.is_active)
+    stream_manager.set_paused(cam.id, not cam.is_active)
     return _serialize_camera(cam)
 
 
 @router.post("/cameras/{camera_id}/simulate")
-def simulate_camera_event(camera_id: int, payload: SimulateRequest, db: Session = Depends(get_db)):
-    cam = db.query(Camera).filter(Camera.id == camera_id).first()
-    if not cam:
-        raise HTTPException(status_code=404, detail="Камера не найдена")
-    ok = stream_manager.trigger_scenario(camera_id, payload.scenario)
-    if not ok:
-        raise HTTPException(status_code=400, detail="Симуляция доступна только для виртуальных потоков sim://")
+def simulate_camera_event(camera_id: int, payload: SimulateRequest):
+    if not stream_manager.trigger_scenario(camera_id, payload.scenario):
+        raise HTTPException(status_code=400, detail="Симуляция доступна только для sim:// камер")
     return {"status": "triggered", "camera_id": camera_id, "scenario": payload.scenario}
 
 
-@router.delete("/cameras/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/cameras/{camera_id}", status_code=204)
 def delete_camera(camera_id: int, db: Session = Depends(get_db)):
-    cam = db.query(Camera).filter(Camera.id == camera_id).first()
-    if not cam:
+    cam = db.get(Camera, camera_id)
+    if not cam or cam.rtsp_url == "lab://uploads":
         raise HTTPException(status_code=404, detail="Камера не найдена")
     stream_manager.stop_camera(camera_id)
-    for v in cam.violations:
-        safe_delete_media_file(v.image_path)
-        safe_delete_media_file(v.video_path)
+    _delete_incidents(list(cam.violations), db)
+    db.expire(cam, ["violations"])
     db.delete(cam)
     db.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return Response(status_code=204)
 
 
 @router.get("/cameras/{camera_id}/snapshot")
@@ -157,361 +111,181 @@ def camera_snapshot(camera_id: int):
     frame = stream_manager.get_frame(camera_id)
     if not frame:
         raise HTTPException(status_code=404, detail="Кадр ещё не готов")
-    return Response(content=frame, media_type="image/jpeg")
+    return Response(frame, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/cameras/{camera_id}/stream")
-async def stream_camera(camera_id: int, request: Request, db: Session = Depends(get_db)):
-    cam = db.query(Camera).filter(Camera.id == camera_id).first()
-    if not cam:
+async def stream_camera(camera_id: int, request: Request):
+    if not stream_manager.has_camera(camera_id):
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
-    async def mjpeg_generator():
-        last_sent_seq = -1
-        while True:
-            if await request.is_disconnected():
-                break
-            if not stream_manager.has_camera(camera_id):
-                break
+    async def frames():
+        last = -1
+        while not await request.is_disconnected() and stream_manager.has_camera(camera_id):
             frame, seq = stream_manager.get_frame_with_seq(camera_id)
-            if frame and seq != last_sent_seq:
-                last_sent_seq = seq
+            if frame and seq != last:
+                last = seq
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
-            await asyncio.sleep(1.0 / 15.0)
+            await asyncio.sleep(1 / 15)
+    return StreamingResponse(frames(), media_type="multipart/x-mixed-replace; boundary=frame", headers={"Cache-Control": "no-store"})
 
-    return StreamingResponse(
-        mjpeg_generator(),
-        media_type="multipart/x-mixed-replace; boundary=frame",
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-    )
-
-
-# ─── Нарушения и видеофрагменты ───────────────────────────────────────────────
 
 @router.get("/violations", response_model=list[ViolationOut])
-def list_violations(
-    violation_type: str | None = None,
-    camera_id: int | None = None,
-    unacknowledged_only: bool = False,
-    limit: int = 100,
-    db: Session = Depends(get_db),
-):
-    query = db.query(Violation).outerjoin(Camera)
+def list_violations(violation_type: str | None = None, camera_id: int | None = None, unacknowledged_only: bool = False, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
+    query = db.query(Violation)
     if violation_type:
         query = query.filter(Violation.violation_type == violation_type)
-    if camera_id:
+    if camera_id is not None:
         query = query.filter(Violation.camera_id == camera_id)
     if unacknowledged_only:
         query = query.filter(Violation.is_acknowledged.is_(False))
-
-    rows = query.order_by(Violation.detected_at.desc(), Violation.id.desc()).limit(min(limit, 500)).all()
-    return [_serialize_violation(r) for r in rows]
+    return [_serialize_violation(v) for v in query.order_by(Violation.detected_at.desc(), Violation.id.desc()).offset(offset).limit(limit).all()]
 
 
 @router.patch("/violations/{violation_id}/ack", response_model=ViolationOut)
 def acknowledge_violation(violation_id: int, db: Session = Depends(get_db)):
-    row = db.query(Violation).filter(Violation.id == violation_id).first()
+    row = db.get(Violation, violation_id)
     if not row:
         raise HTTPException(status_code=404, detail="Инцидент не найден")
-    row.is_acknowledged = not row.is_acknowledged
+    row.is_acknowledged = True  # Idempotent acknowledgement, not a toggle.
     db.commit()
-    db.refresh(row)
     return _serialize_violation(row)
 
 
-@router.delete("/violations/{violation_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/violations/{violation_id}", status_code=204)
 def delete_violation(violation_id: int, db: Session = Depends(get_db)):
-    row = db.query(Violation).filter(Violation.id == violation_id).first()
+    row = db.get(Violation, violation_id)
     if not row:
         raise HTTPException(status_code=404, detail="Инцидент не найден")
-    safe_delete_media_file(row.image_path)
-    safe_delete_media_file(row.video_path)
-    db.delete(row)
-    db.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    _delete_incidents([row], db)
+    return Response(status_code=204)
 
 
 @router.get("/violations/{violation_id}/video")
 def get_violation_video(violation_id: int, db: Session = Depends(get_db)):
-    row = db.query(Violation).filter(Violation.id == violation_id).first()
+    row = db.get(Violation, violation_id)
     if not row or not row.video_path:
-        raise HTTPException(status_code=404, detail="Видеозапись инцидента не найдена")
+        raise HTTPException(status_code=404, detail="У этого инцидента нет видеозаписи")
+    root = settings.MEDIA_ROOT.resolve()
+    target = (root / row.video_path.removeprefix("/media/")).resolve()
+    if not target.is_relative_to(root) or not target.is_file():
+        raise HTTPException(status_code=404, detail="Видеофайл отсутствует")
+    return FileResponse(target, media_type="video/mp4", headers={"Cache-Control": "private, no-store"})
 
-    rel = row.video_path.removeprefix("/media/")
-    media_root = settings.MEDIA_ROOT.resolve()
-    file_path = (media_root / rel).resolve()
-    try:
-        file_path.relative_to(media_root)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Недопустимый путь видеофайла") from exc
-
-    if not file_path.is_file():
-        raise HTTPException(status_code=404, detail="Видеофайл отсутствует на диске")
-
-    return FileResponse(path=str(file_path), media_type="video/mp4", filename=file_path.name)
-
-
-# ─── Интерактивная проверка произвольных фото / видео ─────────────────────────
 
 @router.post("/analyze/upload")
-async def analyze_uploaded_media(
-    file: UploadFile = File(...),
-    save_violation: bool = Form(default=True),
-    db: Session = Depends(get_db),
-):
-    suffix = Path(file.filename or "upload.jpg").suffix.lower()
-    is_video = suffix in {".mp4", ".avi", ".mov", ".mkv", ".webm"}
-    max_bytes = (settings.MAX_UPLOAD_VIDEO_MB if is_video else settings.MAX_UPLOAD_IMAGE_MB) * 1024 * 1024
-    content = await read_upload_limited(file, max_bytes=max_bytes)
+def analyze_uploaded_media(file: UploadFile = File(...), save_violation: bool = Form(False), db: Session = Depends(get_db)):
+    return analyze_media(file, save_violation, db)
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-
-    if not is_video:
-        arr = np.frombuffer(content, dtype=np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if img is None:
-            raise HTTPException(status_code=400, detail="Не удалось декодировать изображение")
-
-        if img.shape[0] > 4096 or img.shape[1] > 4096:
-            img = cv2.resize(img, (1280, int(1280 * img.shape[0] / img.shape[1])), interpolation=cv2.INTER_AREA)
-
-        annotated, analysis = detector.analyze_frame(img, camera_title="ПРОВЕРКА МЕДИАФАЙЛА")
-        out_rel = f"uploads/analyzed_{stamp}.jpg"
-        cv2.imwrite(str(settings.MEDIA_ROOT / out_rel), annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-
-        saved_ids: list[int] = []
-        if save_violation and analysis["violations"]:
-            first_cam = db.query(Camera).order_by(Camera.id.asc()).first()
-            if first_cam:
-                vid_rel = f"videos/upload_{stamp}.mp4"
-                encode_h264_clip([annotated] * 24, settings.MEDIA_ROOT / vid_rel, fps=12.0)
-                for item in analysis["violations"]:
-                    rec = Violation(
-                        camera_id=first_cam.id,
-                        violation_type=item["type"],
-                        confidence=item["confidence"],
-                        bbox_json=json.dumps(item["bbox"]),
-                        image_path=f"/media/{out_rel}",
-                        video_path=f"/media/{vid_rel}",
-                    )
-                    db.add(rec)
-                    db.commit()
-                    db.refresh(rec)
-                    saved_ids.append(rec.id)
-
-        return {
-            "media_type": "image",
-            "result_url": f"/media/{out_rel}",
-            "violations": analysis["violations"],
-            "safe_objects": analysis["safe_objects"],
-            "latency_ms": analysis["latency_ms"],
-            "saved_violation_ids": saved_ids,
-        }
-
-    raw_vid = settings.MEDIA_ROOT / "uploads" / f"raw_{stamp}{suffix}"
-    raw_vid.write_bytes(content)
-
-    cap = cv2.VideoCapture(str(raw_vid))
-    frames_out: list[np.ndarray] = []
-    aggregated_violations: list[dict] = []
-    idx = 0
-    last_an = {"violations": [], "safe_objects": [], "latency_ms": 0.0}
-
-    try:
-        while len(frames_out) < 90:
-            ok, frm = cap.read()
-            if not ok or frm is None:
-                break
-            frm = cv2.resize(frm, (960, 540), interpolation=cv2.INTER_AREA)
-            if idx % 3 == 0:
-                last_an = detector.detect_frame(frm)
-                for v in last_an["violations"]:
-                    aggregated_violations.append(v)
-            ann = detector.annotate_frame(frm, last_an, camera_title="ПРОВЕРКА ВИДЕОФАЙЛА")
-            frames_out.append(ann)
-            idx += 1
-    finally:
-        cap.release()
-        raw_vid.unlink(missing_ok=True)
-
-    if not frames_out:
-        raise HTTPException(status_code=400, detail="Не удалось прочитать кадры видео")
-
-    out_vid_rel = f"uploads/analyzed_{stamp}.mp4"
-    encode_h264_clip(frames_out, settings.MEDIA_ROOT / out_vid_rel, fps=12.0)
-
-    best_by_type: dict[str, dict] = {}
-    for v in aggregated_violations:
-        if v["type"] not in best_by_type or v["confidence"] > best_by_type[v["type"]]["confidence"]:
-            best_by_type[v["type"]] = v
-
-    return {
-        "media_type": "video",
-        "result_url": f"/media/{out_vid_rel}",
-        "violations": list(best_by_type.values()),
-        "safe_objects": [],
-        "frames_processed": len(frames_out),
-        "saved_violation_ids": [],
-    }
-
-
-# ─── Аналитика и статистика ───────────────────────────────────────────────────
 
 @router.get("/stats")
 def get_dashboard_stats(db: Session = Depends(get_db)):
-    cams = db.query(Camera).all()
+    cams = db.query(Camera).filter(Camera.rtsp_url != "lab://uploads").all()
     viols = db.query(Violation).order_by(Violation.detected_at.desc()).all()
-
     by_type = {"weapon": 0, "suspicious_bag": 0, "dog": 0}
-    unack_count = 0
     for v in viols:
         by_type[v.violation_type] = by_type.get(v.violation_type, 0) + 1
-        if not v.is_acknowledged:
-            unack_count += 1
-
     now = datetime.now(timezone.utc)
-    buckets = []
+    timeline = []
     for i in range(7, -1, -1):
-        start_t = now - timedelta(minutes=(i + 1) * 5)
-        end_t = now - timedelta(minutes=i * 5)
-        cnt = sum(
-            1
-            for v in viols
-            if start_t <= (v.detected_at if v.detected_at.tzinfo else v.detected_at.replace(tzinfo=timezone.utc)) < end_t
-        )
-        buckets.append({"label": end_t.astimezone().strftime("%H:%M"), "count": cnt})
-
-    avg_conf = round(sum(v.confidence for v in viols) / len(viols), 4) if viols else 0.0
+        start, end = now - timedelta(minutes=(i + 1) * 5), now - timedelta(minutes=i * 5)
+        timeline.append({"label": end.astimezone().strftime("%H:%M"), "count": sum(start <= (v.detected_at.replace(tzinfo=timezone.utc) if v.detected_at.tzinfo is None else v.detected_at) < end for v in viols)})
     latencies = [stream_manager.get_telemetry(c.id)["latency_ms"] for c in cams if c.is_active]
-
-    return {
-        "total_cameras": len(cams),
-        "active_cameras": sum(1 for c in cams if c.is_active),
-        "total_violations": len(viols),
-        "unacknowledged_violations": unack_count,
-        "average_confidence": avg_conf,
-        "by_type": by_type,
-        "timeline": buckets,
-        "model": {
-            "active_weights": detector.active_weights_name,
-            "reloaded_at": detector.reloaded_at,
-            "avg_latency_ms": round(sum(latencies) / len(latencies), 1) if latencies else 0.0,
-        },
-    }
+    return {"total_cameras": len(cams), "active_cameras": sum(stream_manager.get_telemetry(c.id)["online"] for c in cams), "total_violations": len(viols), "unacknowledged_violations": sum(not v.is_acknowledged for v in viols), "average_confidence": round(sum(v.confidence for v in viols) / len(viols), 4) if viols else 0, "by_type": by_type, "timeline": timeline, "model": {"active_weights": detector.active_weights_name, "reloaded_at": detector.reloaded_at, "avg_latency_ms": round(sum(latencies) / len(latencies), 1) if latencies else 0}}
 
 
-# ─── Дообучение модели и управление датасетом ─────────────────────────────────
-
-@router.get("/models/dataset")
+@router.get("/models/dataset", dependencies=[Depends(require_admin)])
 def get_dataset_info():
-    if str(PROJECT_ROOT) not in sys.path:
-        sys.path.insert(0, str(PROJECT_ROOT))
-    from ml.datasets.generate_dataset import ensure_custom_dataset
-
-    return ensure_custom_dataset(PROJECT_ROOT)
+    return get_dataset_stats(PROJECT_ROOT)
 
 
 @router.post("/models/dataset/upload")
-async def upload_training_sample(
-    file: UploadFile = File(...),
-    violation_type: str = Form(...),
-):
-    if violation_type not in {"dog", "weapon", "suspicious_bag"}:
-        raise HTTPException(status_code=400, detail="Некорректный класс объекта")
-
-    if str(PROJECT_ROOT) not in sys.path:
-        sys.path.insert(0, str(PROJECT_ROOT))
-    from ml.datasets.generate_dataset import CLASS_MAP, ensure_custom_dataset, extract_foreground_rgba
-
-    ensure_custom_dataset(PROJECT_ROOT)
-
-    content = await read_upload_limited(file, max_bytes=settings.MAX_UPLOAD_IMAGE_MB * 1024 * 1024)
-    arr = np.frombuffer(content, dtype=np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if img is None:
-        raise HTTPException(status_code=400, detail="Не удалось прочитать изображение")
-
-    img_resized = cv2.resize(img, (960, 540), interpolation=cv2.INTER_AREA)
-    an = detector.detect_frame(img_resized)
-    bbox = None
-    for v in an["violations"]:
-        if v["type"] == violation_type:
-            bbox = v["bbox"]
-            break
-    if bbox is None:
-        rgba = extract_foreground_rgba(img_resized)
-        ys, xs = np.where(rgba[:, :, 3] > 128)
-        if len(xs) > 50 and len(ys) > 50:
-            bbox = [int(xs.min()), int(ys.min()), int(xs.max()), int(xs.max())]
-        else:
-            bbox = [144, 81, 816, 459]
-
-    x1, y1, x2, y2 = bbox
-    cx = ((x1 + x2) / 2.0) / 960.0
-    cy = ((y1 + y2) / 2.0) / 540.0
-    bw = max(0.05, (x2 - x1) / 960.0)
-    bh = max(0.05, (y2 - y1) / 540.0)
-
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-    ds_root = PROJECT_ROOT / "ml" / "datasets" / "custom"
-    img_out = ds_root / "images" / "train" / f"user_{violation_type}_{stamp}.jpg"
-    lbl_out = ds_root / "labels" / "train" / f"user_{violation_type}_{stamp}.txt"
-
-    cv2.imwrite(str(img_out), img_resized, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
-    lbl_out.write_text(f"{CLASS_MAP[violation_type]} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n", encoding="utf-8")
-
-    return {
-        "status": "added",
-        "filename": img_out.name,
-        "violation_type": violation_type,
-        "dataset": get_dataset_info(),
-    }
+def upload_training_sample(file: UploadFile = File(...), violation_type: str = Form(...), bbox: str = Form(...), split: str = Form("train"), db: Session = Depends(get_db)):
+    if violation_type not in CLASS_MAP or split not in {"train", "val"}:
+        raise HTTPException(status_code=400, detail="Некорректный класс или split")
+    try:
+        coords = json.loads(bbox)
+        if len(coords) != 4 or any(type(x) not in (int, float) for x in coords):
+            raise ValueError()
+        x1, y1, x2, y2 = coords
+        if not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail="Нужна подтверждённая рамка [x1,y1,x2,y2] в диапазоне 0–1")
+    img = decode_image(read_upload_sync(file, settings.MAX_UPLOAD_IMAGE_MB * 1024 * 1024))
+    root = PROJECT_ROOT / "ml" / "datasets" / "custom"
+    name = f"user_{violation_type}_{uuid.uuid4().hex}"
+    image = root / "images" / split / f"{name}.jpg"
+    label = root / "labels" / split / f"{name}.txt"
+    with RETRAIN_LOCK, DATASET_LOCK:
+        if db.query(RetrainJob.id).filter(RetrainJob.status.in_(["queued", "running"])).first():
+            raise HTTPException(status_code=409, detail="Нельзя менять датасет во время обучения")
+        image.parent.mkdir(parents=True, exist_ok=True)
+        label.parent.mkdir(parents=True, exist_ok=True)
+        if not cv2.imwrite(str(image), img):
+            raise HTTPException(status_code=500, detail="Не удалось сохранить изображение")
+        label.write_text(f"{CLASS_MAP[violation_type]} {(x1+x2)/2:.6f} {(y1+y2)/2:.6f} {x2-x1:.6f} {y2-y1:.6f}\n", encoding="utf-8")
+    return {"status": "added", "filename": image.name, "violation_type": violation_type, "dataset": get_dataset_info()}
 
 
-@router.get("/models/jobs", response_model=list[RetrainJobOut])
+@router.get("/models/jobs", response_model=list[RetrainJobOut], dependencies=[Depends(require_admin)])
 def list_retrain_jobs(db: Session = Depends(get_db)):
-    jobs = db.query(RetrainJob).order_by(RetrainJob.id.desc()).limit(20).all()
-    return [_serialize_job(j) for j in jobs]
+    return [_serialize_job(j) for j in db.query(RetrainJob).order_by(RetrainJob.id.desc()).limit(20).all()]
 
 
 @router.post("/models/retrain", response_model=RetrainJobOut)
 def retrain_model(payload: RetrainRequest, db: Session = Depends(get_db)):
     safe_yaml = validate_dataset_yaml(payload.dataset_yaml)
     rel_yaml = safe_yaml.relative_to(PROJECT_ROOT).as_posix()
-
     with RETRAIN_LOCK:
-        active = db.query(RetrainJob).filter(RetrainJob.status.in_(["queued", "running"])).first()
-        if active:
-            raise HTTPException(status_code=409, detail=f"Задача дообучения #{active.id} уже выполняется")
-
-        job = RetrainJob(
-            status="queued",
-            epochs=payload.epochs,
-            current_epoch=0,
-            dataset_yaml=rel_yaml,
-            details="Поставлена в очередь обучения",
-        )
+        try:
+            validate_dataset(safe_yaml)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if db.query(RetrainJob).filter(RetrainJob.status.in_(["queued", "running"])).first():
+            raise HTTPException(status_code=409, detail="Обучение уже выполняется")
+        if not settings.ENABLE_LOCAL_TRAINING:
+            try:
+                if not celery_app.control.inspect(timeout=1).ping():
+                    raise RuntimeError("No workers")
+            except Exception as exc:
+                raise HTTPException(status_code=503, detail="Воркер обучения недоступен") from exc
+        job = RetrainJob(status="queued", epochs=payload.epochs, current_epoch=0, dataset_yaml=rel_yaml, details="Ожидает обучения; активация весов только вручную")
         db.add(job)
         db.commit()
         db.refresh(job)
-
-    dispatched_celery = False
-    try:
-        import redis as redis_lib
-        r_client = redis_lib.from_url(settings.REDIS_URL, socket_connect_timeout=0.35, socket_timeout=0.35)
-        if r_client.ping():
-            workers = celery_app.control.inspect(timeout=0.4).active()
-            if workers:
+        if settings.ENABLE_LOCAL_TRAINING:
+            threading.Thread(target=execute_retrain_job, args=(job.id, payload.epochs, rel_yaml), daemon=True).start()
+        else:
+            try:
                 retrain_model_task.delay(job.id, payload.epochs, rel_yaml)
-                dispatched_celery = True
-    except Exception:
-        dispatched_celery = False
+            except Exception as exc:
+                job.status = "failed"
+                job.details = "Не удалось поставить задачу в очередь"
+                db.commit()
+                raise HTTPException(status_code=503, detail=job.details) from exc
+        return _serialize_job(job)
 
-    if not dispatched_celery:
-        threading.Thread(
-            target=execute_retrain_job,
-            args=(job.id, payload.epochs, rel_yaml),
-            daemon=True,
-        ).start()
 
-    return _serialize_job(job)
+@router.post("/models/jobs/{job_id}/activate")
+def activate_model(job_id: int, db: Session = Depends(get_db)):
+    with RETRAIN_LOCK:
+        job = db.get(RetrainJob, job_id)
+        candidate = PROJECT_ROOT / "ml" / "models" / "candidates" / f"job_{job_id}.pt"
+        if not job or job.status not in {"ready", "active"} or not candidate.is_file():
+            raise HTTPException(status_code=409, detail="Нет проверенного результата обучения для этой задачи")
+        target = Path(settings.YOLO_CUSTOM_MODEL_PATH)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp = target.with_suffix(".tmp.pt")
+        shutil.copy2(candidate, temp)
+        try:
+            # Validate model loading before touching the active file.
+            detector.activate_candidate(temp, target)
+        finally:
+            temp.unlink(missing_ok=True)
+        for old in db.query(RetrainJob).filter(RetrainJob.status == "active").all():
+            old.status = "ready"
+        job.status = "active"
+        job.details = "Модель применена оператором. Метрики относятся к валидационной выборке, не ко всем камерам."
+        db.commit()
+    return {"status": "active", "job_id": job_id}

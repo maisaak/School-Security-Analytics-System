@@ -21,8 +21,16 @@ media/
 backend/media/
 ml/runs/
 ml/datasets/custom/
+ml/models/candidates/
+ml/models/active.pt
 /yolo*.pt
+/ml/models/yolo11*.pt
+/ml/models/yolov8*.pt
+*.part
+*.download
 
 # Environment
 .env
+.env.*
+!.env.example
 .DS_Store

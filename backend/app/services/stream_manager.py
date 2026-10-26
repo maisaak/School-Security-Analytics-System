@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import subprocess
 import threading
 import time
+import uuid
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +19,10 @@ from app.db.models import Violation
 from app.db.session import SessionLocal
 from app.models.detector import detector
 from app.services.simulator import RealisticCCTVSimulator
+from app.services.event_policy import EventPolicy
+from app.services.video_capture import LatestFrameCapture
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_ffmpeg_bin() -> str:
@@ -43,15 +49,24 @@ def encode_h264_clip(frames: list[np.ndarray], output_path: Path, fps: float = 1
     even_w = w - (w % 2)
     even_h = h - (h % 2)
 
+    # Write an intermediate file first: piping raw frames can block forever if FFmpeg hangs.
+    temp_path = output_path.with_name(f".{uuid.uuid4().hex}.avi")
+    writer = cv2.VideoWriter(str(temp_path), cv2.VideoWriter_fourcc(*"MJPG"), fps, (even_w, even_h))
+    if not writer.isOpened():
+        raise RuntimeError("Не удалось открыть видеокодировщик")
+    try:
+        for frm in frames:
+            writer.write(frm[:even_h, :even_w])
+    finally:
+        writer.release()
+    transcode_h264(temp_path, output_path)
+
+
+def transcode_h264(input_path: Path, output_path: Path) -> None:
     cmd = [
         FFMPEG_BIN,
         "-y",
-        "-f", "rawvideo",
-        "-vcodec", "rawvideo",
-        "-pix_fmt", "bgr24",
-        "-s", f"{even_w}x{even_h}",
-        "-r", f"{fps:.2f}",
-        "-i", "-",
+        "-i", str(input_path),
         "-an",
         "-vcodec", "libx264",
         "-preset", "ultrafast",
@@ -61,23 +76,14 @@ def encode_h264_clip(frames: list[np.ndarray], output_path: Path, fps: float = 1
         str(output_path),
     ]
     try:
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        assert proc.stdin is not None
-        for frm in frames:
-            if frm.shape[1] != even_w or frm.shape[0] != even_h:
-                frm = frm[:even_h, :even_w]
-            proc.stdin.write(frm.tobytes())
-        proc.stdin.close()
-        proc.wait(timeout=20)
-        if output_path.is_file() and output_path.stat().st_size > 512:
-            return
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=60, check=True)
+        if not output_path.is_file() or output_path.stat().st_size <= 512:
+            raise RuntimeError("FFmpeg не создал видео")
     except Exception:
-        pass
-
-    writer = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (even_w, even_h))
-    for frm in frames:
-        writer.write(frm[:even_h, :even_w])
-    writer.release()
+        output_path.unlink(missing_ok=True)
+        raise
+    finally:
+        input_path.unlink(missing_ok=True)
 
 
 class CameraWorker(threading.Thread):
@@ -110,9 +116,14 @@ class CameraWorker(threading.Thread):
         self.current_fps: float = 0.0
         self.stream_online: bool = False
         self.last_error: str | None = None
+        self.policy = EventPolicy(settings.UNATTENDED_MIN_SECONDS, settings.DETECTION_CONFIRMATIONS)
+        self._saving = threading.BoundedSemaphore(1)
+        self.capture: LatestFrameCapture | None = None
 
     def stop(self) -> None:
         self.stop_event.set()
+        if self.capture:
+            self.capture.stop_event.set()
 
     def trigger_scenario(self, scenario: str) -> bool:
         if self.simulator is None:
@@ -137,11 +148,17 @@ class CameraWorker(threading.Thread):
         img_abs = settings.MEDIA_ROOT / img_rel
         vid_abs = settings.MEDIA_ROOT / vid_rel
 
-        cv2.imwrite(str(img_abs), snapshot, [int(cv2.IMWRITE_JPEG_QUALITY), 88])
-        encode_h264_clip(clip_frames, vid_abs, fps=self.TARGET_FPS)
-
         db = SessionLocal()
         try:
+            if self.stop_event.is_set():
+                return
+            if not cv2.imwrite(str(img_abs), snapshot, [int(cv2.IMWRITE_JPEG_QUALITY), 88]):
+                raise RuntimeError("Не удалось сохранить снимок")
+            encode_h264_clip(clip_frames, vid_abs, fps=self.TARGET_FPS)
+            if self.stop_event.is_set():
+                img_abs.unlink(missing_ok=True)
+                vid_abs.unlink(missing_ok=True)
+                return
             row = Violation(
                 camera_id=self.camera_id,
                 violation_type=v_type,
@@ -153,22 +170,15 @@ class CameraWorker(threading.Thread):
             db.add(row)
             db.commit()
 
-            # Ротация старых записей, чтобы диск не переполнялся при 24/7 работе
-            total_count = db.query(Violation).count()
-            if total_count > settings.MAX_STORED_VIOLATIONS:
-                stale = (
-                    db.query(Violation)
-                    .order_by(Violation.id.asc())
-                    .limit(total_count - settings.MAX_STORED_VIOLATIONS)
-                    .all()
-                )
-                for old_v in stale:
-                    safe_delete_media_file(old_v.image_path)
-                    safe_delete_media_file(old_v.video_path)
-                    db.delete(old_v)
-                db.commit()
+            # Retention runs in one maintenance worker, including laboratory uploads.
+        except Exception:
+            db.rollback()
+            logger.exception("Ошибка сохранения инцидента камеры %s", self.camera_id)
+            img_abs.unlink(missing_ok=True)
+            vid_abs.unlink(missing_ok=True)
         finally:
             db.close()
+            self._saving.release()
 
     def _render_offline_placeholder(self, reason: str) -> bytes:
         canvas = np.zeros((540, 960, 3), dtype=np.uint8)
@@ -186,6 +196,21 @@ class CameraWorker(threading.Thread):
         return jpg.tobytes()
 
     def run(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                self._run_loop()
+            except Exception:
+                if self.capture:
+                    self.capture.close()
+                    self.capture = None
+                logger.exception("Ошибка обработки камеры %s", self.camera_id)
+                self.stream_online = False
+                self.current_fps = 0.0
+                self.last_error = "Ошибка обработки. Повтор через 3 секунды."
+                self.policy.reset()
+                self.stop_event.wait(3)
+
+    def _run_loop(self) -> None:
         frame_idx = 0
         fps_counter = 0
         fps_timer = time.monotonic()
@@ -193,6 +218,8 @@ class CameraWorker(threading.Thread):
         while not self.stop_event.is_set():
             if self.paused:
                 self.stream_online = False
+                self.policy.reset()
+                self.last_analysis = {"violations": [], "safe_objects": [], "person_count": 0, "latency_ms": 0.0}
                 time.sleep(0.25)
                 continue
 
@@ -217,28 +244,28 @@ class CameraWorker(threading.Thread):
                         time.sleep(sleep_left)
                 continue
 
-            # Реальный RTSP / HTTP / локальный видеофайл через OpenCV FFmpeg backend
+            # Real streams are drained independently; inference always receives the newest frame.
             source: int | str = 0 if self.rtsp_url == "webcam" else self.rtsp_url
-            cap = cv2.VideoCapture(source)
-            if not cap.isOpened():
-                self.stream_online = False
-                self.last_error = "Не удалось подключиться к RTSP-источнику"
-                self.latest_jpeg = self._render_offline_placeholder("ПЕРЕПОДКЛЮЧЕНИЕ...")
-                time.sleep(2.5)
-                continue
-
-            self.stream_online = True
-            self.last_error = None
+            self.policy.reset()
+            self.capture = LatestFrameCapture(source).start()
+            waiting_since = time.monotonic()
             while not self.stop_event.is_set() and not self.paused:
                 loop_start = time.monotonic()
-                ok, raw_frame = cap.read()
+                ok, raw_frame = self.capture.read()
                 if not ok or raw_frame is None:
-                    # Если это локальный видеоролик — зацикливаем для непрерывного мониторинга
-                    if isinstance(source, str) and Path(source).is_file():
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    if not self.capture.error and time.monotonic() - waiting_since < 6:
+                        self.stop_event.wait(0.02)
                         continue
+                    self.stream_online = False
+                    self.current_fps = 0.0
+                    self.last_error = "Поток прерван. Переподключение…"
+                    self.latest_jpeg = self._render_offline_placeholder("НЕТ СВЯЗИ")
+                    self.latest_seq += 1
+                    self.last_analysis = {"violations": [], "safe_objects": [], "person_count": 0, "latency_ms": 0.0}
                     break
-
+                waiting_since = time.monotonic()
+                self.stream_online = True
+                self.last_error = None
                 raw_frame = cv2.resize(raw_frame, (960, 540), interpolation=cv2.INTER_AREA)
                 self._process_single_frame(raw_frame, frame_idx)
                 frame_idx += 1
@@ -254,12 +281,13 @@ class CameraWorker(threading.Thread):
                 if sleep_left > 0:
                     time.sleep(sleep_left)
 
-            cap.release()
-            time.sleep(1.0)
+            self.capture.close()
+            self.capture = None
+            self.stop_event.wait(1)
 
     def _process_single_frame(self, raw_frame: np.ndarray, frame_idx: int) -> None:
         if frame_idx % self.DETECT_EVERY_N_FRAMES == 0:
-            self.last_analysis = detector.detect_frame(raw_frame)
+            self.last_analysis = self.policy.update(detector.detect_frame(raw_frame), time.monotonic())
 
         annotated = detector.annotate_frame(raw_frame, self.last_analysis, camera_title=self.name)
         self.frame_buffer.append(annotated)
@@ -272,7 +300,7 @@ class CameraWorker(threading.Thread):
         now = time.monotonic()
         for item in self.last_analysis.get("violations", []):
             v_type = item["type"]
-            if now - self.last_violation_ts.get(v_type, -999.0) >= settings.VIOLATION_COOLDOWN_SEC:
+            if now - self.last_violation_ts.get(v_type, -999.0) >= settings.VIOLATION_COOLDOWN_SEC and self._saving.acquire(blocking=False):
                 self.last_violation_ts[v_type] = now
                 snapshot_copy = annotated.copy()
                 clip_frames = list(self.frame_buffer)
@@ -292,6 +320,8 @@ class StreamManager:
         self._lock = threading.Lock()
 
     def start_camera(self, camera_id: int, name: str, rtsp_url: str, is_active: bool = True) -> None:
+        if rtsp_url == "lab://uploads":
+            return
         with self._lock:
             existing = self._workers.pop(camera_id, None)
             if existing:
@@ -312,7 +342,10 @@ class StreamManager:
             worker = self._workers.pop(camera_id, None)
         if worker:
             worker.stop()
-            worker.join(timeout=2.5)
+            worker.join(timeout=12)
+            # Wait for the bounded incident writer before deleting DB records or media.
+            with worker._saving:
+                pass
 
     def trigger_scenario(self, camera_id: int, scenario: str) -> bool:
         worker = self._workers.get(camera_id)
@@ -343,6 +376,7 @@ class StreamManager:
                 "person_count": 0,
                 "active_threats": [],
                 "is_simulated": False,
+                "last_error": None,
             }
         return {
             "online": worker.stream_online and not worker.paused,
@@ -351,6 +385,7 @@ class StreamManager:
             "person_count": worker.last_analysis.get("person_count", 0),
             "active_threats": [v["type"] for v in worker.last_analysis.get("violations", [])],
             "is_simulated": worker.simulator is not None,
+            "last_error": worker.last_error,
         }
 
     def stop_all(self) -> None:
@@ -360,7 +395,9 @@ class StreamManager:
         for worker in workers:
             worker.stop()
         for worker in workers:
-            worker.join(timeout=2.5)
+            worker.join(timeout=12)
+            with worker._saving:
+                pass
 
 
 stream_manager = StreamManager()

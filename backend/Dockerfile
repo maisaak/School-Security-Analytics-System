@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
@@ -6,15 +6,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+WORKDIR /app/backend
 
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip uninstall -y opencv-python || true \
     && pip install --no-cache-dir --force-reinstall --no-deps opencv-python-headless
 
-COPY backend/app ./app
-COPY ml ./ml
+COPY backend/app /app/backend/app
+COPY ml /app/ml
+ENV PYTHONPATH=/app/backend:/app
 
 EXPOSE 8000
 

@@ -37,7 +37,7 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats }) => {
       accent: "text-red-400 bg-red-500/10 border-red-500/25",
     },
     {
-      title: "Инференс YOLOv8",
+      title: "Инференс YOLO",
       value: stats ? `${stats.model.avg_latency_ms.toFixed(0)} мс` : "—",
       sub: stats && stats.average_confidence > 0
         ? `Средняя уверенность: ${(stats.average_confidence * 100).toFixed(1)}%`

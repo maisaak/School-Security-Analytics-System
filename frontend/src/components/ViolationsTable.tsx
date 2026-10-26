@@ -21,6 +21,8 @@ export const VIOLATION_META: Record<
 };
 
 interface ViolationsTableProps {
+  canAcknowledge: boolean;
+  canDelete: boolean;
   violations: Violation[];
   cameras: Camera[];
   filterType: string;
@@ -35,6 +37,8 @@ interface ViolationsTableProps {
 }
 
 export const ViolationsTable: React.FC<ViolationsTableProps> = ({
+  canAcknowledge,
+  canDelete,
   violations,
   cameras,
   filterType,
@@ -164,6 +168,7 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
                     <td className="py-3 px-2.5">
                       <button
                         onClick={() => onAcknowledge(v.id)}
+                        disabled={!canAcknowledge || v.is_acknowledged}
                         className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition ${
                           v.is_acknowledged
                             ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
@@ -190,15 +195,15 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition"
                         >
                           <Play className="w-3.5 h-3.5" />
-                          Видео
+                          {v.video_url ? "Видео" : "Фото"}
                         </button>
-                        <button
+                        {canDelete && <button
                           onClick={() => onDelete(v.id)}
                           title="Удалить запись"
                           className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition"
                         >
                           <Trash2 className="w-4 h-4" />
-                        </button>
+                        </button>}
                       </div>
                     </td>
                   </tr>

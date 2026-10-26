@@ -1,4 +1,4 @@
-path: ml/datasets/custom
+path: custom
 train: images/train
 val: images/val
 

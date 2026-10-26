@@ -8,7 +8,7 @@ matplotlib.use("Agg")
 import yaml
 from ultralytics import YOLO
 
-from ml.datasets.generate_dataset import ensure_custom_dataset
+from ml.dataset_validation import validate_dataset
 
 
 def train_model(
@@ -35,15 +35,16 @@ def train_model(
     if not start_pt.is_absolute():
         start_pt = (project_root / start_pt).resolve()
 
-    dataset_stats = ensure_custom_dataset(project_root)
-
     src_yaml = Path(data_yaml) if data_yaml else project_root / "ml" / "datasets" / "school_security.yaml"
     if not src_yaml.is_absolute():
         src_yaml = (project_root / src_yaml).resolve()
 
-    cfg = yaml.safe_load(src_yaml.read_text(encoding="utf-8"))
-    cfg["path"] = str((project_root / "ml" / "datasets" / "custom").resolve())
-    resolved_yaml = project_root / "ml" / "runs" / "resolved_school_security.yaml"
+    validated = validate_dataset(src_yaml)
+    dataset_stats = validated["counts"]
+    cfg = validated["config"]
+    cfg["path"] = validated["root"]
+    run_name = out_pt.stem
+    resolved_yaml = project_root / "ml" / "runs" / f"resolved_{run_name}.yaml"
     resolved_yaml.parent.mkdir(parents=True, exist_ok=True)
     resolved_yaml.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
 
@@ -82,8 +83,8 @@ def train_model(
         workers=0,
         plots=False,
         project=str(project_root / "ml" / "runs"),
-        name="school_security_retrain",
-        exist_ok=True,
+        name=run_name,
+        exist_ok=False,
         verbose=False,
     )
 
@@ -120,6 +121,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=8)
     parser.add_argument("--data", type=str, default=None)
     parser.add_argument("--base", type=str, default=None)
+    parser.add_argument("--output", type=str, required=True)
     parser.add_argument("--json-progress", action="store_true")
     args = parser.parse_args()
 
@@ -129,6 +131,7 @@ if __name__ == "__main__":
 
     summary = train_model(
         base_weights=args.base,
+        output_weights=args.output,
         data_yaml=args.data,
         epochs=args.epochs,
         imgsz=416,

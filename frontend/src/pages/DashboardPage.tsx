@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Play, Plus, RefreshCw, X } from "lucide-react";
-import { api, Camera, DashboardStats, Violation } from "../api/client";
+import { api, Camera, DashboardStats, Preferences, User, Violation } from "../api/client";
 import { StatsOverview } from "../components/StatsOverview";
 import { CameraCard } from "../components/CameraCard";
 import { AddCameraModal } from "../components/AddCameraModal";
@@ -9,9 +9,11 @@ import { VideoModal } from "../components/VideoModal";
 
 interface DashboardPageProps {
   onGlobalStatsUpdate: (stats: DashboardStats) => void;
+  preferences: Preferences;
+  role: User["role"];
 }
 
-export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdate }) => {
+export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdate, preferences, role }) => {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [violations, setViolations] = useState<Violation[]>([]);
@@ -25,6 +27,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
   const [activeVideo, setActiveVideo] = useState<Violation | null>(null);
   const [latestAlert, setLatestAlert] = useState<Violation | null>(null);
   const highestSeenId = useRef<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -41,6 +44,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
       onGlobalStatsUpdate(st);
       setCameras(cams);
       setViolations(viols);
+      setError(null);
 
       if (viols.length > 0) {
         const newest = viols[0];
@@ -51,8 +55,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
           highestSeenId.current = newest.id;
         }
       }
-    } catch {
-      // retry silently on next interval
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Нет связи с сервером");
     }
   }, [filterType, filterCameraId, onlyUnack, onGlobalStatsUpdate]);
 
@@ -63,17 +67,20 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
   }, [fetchAll]);
 
   const handleAcknowledge = async (id: number) => {
+    try {
     const updated = await api.acknowledgeViolation(id);
     setViolations((prev) => prev.map((v) => (v.id === id ? updated : v)));
     if (activeVideo && activeVideo.id === id) {
       setActiveVideo(updated);
     }
     fetchAll();
+    } catch (err) { setError(err instanceof Error ? err.message : "Ошибка подтверждения"); }
   };
 
   return (
     <div className="space-y-8">
-      {latestAlert && (
+      {error && <p role="alert" className="rounded-xl border border-red-700 bg-red-950 p-4 text-sm text-red-200">{error}</p>}
+      {latestAlert && preferences.show_alerts && (
         <div className="bg-red-950/80 border border-red-500/50 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4 shadow-lg">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-xl bg-red-500/20 text-red-300">
@@ -81,7 +88,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
             </div>
             <div>
               <p className="text-sm font-semibold text-white">
-                Новое срабатывание YOLOv8:{" "}
+                Новое срабатывание YOLO:{" "}
                 {VIOLATION_META[latestAlert.violation_type]?.title ?? latestAlert.violation_type}
               </p>
               <p className="text-xs text-red-200/80">
@@ -112,7 +119,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
         </div>
       )}
 
-      <StatsOverview stats={stats} />
+      {preferences.show_stats && <StatsOverview stats={stats} />}
 
       <section className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -131,31 +138,39 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
             >
               <RefreshCw className="w-4 h-4" />
             </button>
-            <button
+            {role === "admin" && <button
               onClick={() => setShowAddModal(true)}
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-sm font-medium text-white transition shadow-sm"
             >
               <Plus className="w-4 h-4" />
               Добавить камеру
-            </button>
+            </button>}
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+        <div className={`grid gap-5 ${ {1: "grid-cols-1", 2: "grid-cols-1 md:grid-cols-2", 3: "grid-cols-1 md:grid-cols-2 xl:grid-cols-3", 4: "grid-cols-1 md:grid-cols-2 xl:grid-cols-4"}[preferences.columns] }`}>
           {cameras.map((cam) => (
             <CameraCard
               key={cam.id}
               camera={cam}
+              canManage={role === "admin"}
               onToggle={async (id) => {
+                try {
                 await api.toggleCamera(id);
                 fetchAll();
+                } catch (err) { setError(err instanceof Error ? err.message : "Ошибка управления камерой"); }
               }}
               onDelete={async (id) => {
+                if (!window.confirm("Удалить камеру и её архив инцидентов?")) return;
+                try {
                 await api.deleteCamera(id);
                 fetchAll();
+                } catch (err) { setError(err instanceof Error ? err.message : "Ошибка удаления камеры"); }
               }}
               onSimulate={async (id, scenario) => {
+                try {
                 await api.simulateEvent(id, scenario);
+                } catch (err) { setError(err instanceof Error ? err.message : "Ошибка симуляции"); }
               }}
               onExpand={setExpandedCamera}
             />
@@ -163,7 +178,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
         </div>
       </section>
 
-      <ViolationsTable
+      {preferences.show_archive && <ViolationsTable
+        canAcknowledge={role !== "viewer"}
+        canDelete={role === "admin"}
         violations={violations}
         cameras={cameras}
         filterType={filterType}
@@ -175,10 +192,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
         onOpenVideo={setActiveVideo}
         onAcknowledge={handleAcknowledge}
         onDelete={async (id) => {
+          if (!window.confirm("Удалить инцидент и его медиафайлы?")) return;
+          try {
           await api.deleteViolation(id);
           fetchAll();
+          } catch (err) { setError(err instanceof Error ? err.message : "Ошибка удаления инцидента"); }
         }}
-      />
+      />}
 
       <AddCameraModal
         open={showAddModal}
@@ -190,6 +210,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
       />
 
       <VideoModal
+        canAcknowledge={role !== "viewer"}
         violation={activeVideo}
         onClose={() => setActiveVideo(null)}
         onAcknowledge={handleAcknowledge}

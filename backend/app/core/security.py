@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import hmac
+import hashlib
+import secrets
+import time
 import ipaddress
 import socket
 from pathlib import Path
 from urllib.parse import urlparse
-from fastapi import Depends, HTTPException, Query, Request, UploadFile, status
+from fastapi import Depends, HTTPException, Request, UploadFile, status
 from fastapi.security import APIKeyHeader
 
 from app.core.config import PROJECT_ROOT, settings
+from app.core.accounts import issue_session, principal_for_session, root_principal
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
@@ -18,22 +22,45 @@ BLOCKED_HOSTNAMES = {"localhost", "db", "postgres", "redis", "backend", "celery_
 
 
 def verify_api_key(
+    request: Request,
     header_key: str | None = Depends(api_key_header),
-    query_key: str | None = Query(default=None, alias="api_key"),
 ) -> None:
-    """
-    Опциональная защита API-ключом: если в .env задан API_KEY, все запросы обязаны
-    передавать заголовок X-API-Key (либо ?api_key= для MJPEG/MP4 тегов браузера).
-    """
     configured = (settings.API_KEY or "").strip()
     if not configured:
+        if settings.DEV_MODE:
+            request.state.principal = root_principal()
+            return
+        raise HTTPException(status_code=503, detail="Администратор должен настроить API_KEY")
+    if header_key and hmac.compare_digest(header_key.encode(), configured.encode()):
+        request.state.principal = root_principal()
         return
-    provided = (header_key or query_key or "").strip()
-    if not provided or not hmac.compare_digest(provided, configured):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Неверный или отсутствующий API-ключ (X-API-Key)",
-        )
+    principal = principal_for_session(request.cookies.get("school_session", ""))
+    if principal:
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and request.headers.get("X-Requested-With") != "SchoolSecurity":
+            raise HTTPException(status_code=403, detail="Отсутствует защита CSRF")
+        request.state.principal = principal
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            path = request.url.path.rstrip("/")
+            if path in {"/api/auth/logout", "/api/preferences"}:
+                return
+            operator_action = (path == "/api/analyze/upload" or (path.startswith("/api/violations/") and path.endswith("/ack")))
+            if principal["role"] != "admin" and not (principal["role"] == "operator" and operator_action):
+                raise HTTPException(status_code=403, detail="Недостаточно прав для этого действия")
+        return
+    raise HTTPException(status_code=401, detail="Требуется вход в систему")
+
+
+def create_session() -> str:
+    return issue_session()
+
+
+def valid_session(token: str) -> bool:
+    return principal_for_session(token) is not None
+
+
+def require_admin(request: Request, _: None = Depends(verify_api_key)) -> None:
+    if request.state.principal["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Требуются права администратора")
 
 
 def validate_stream_source(raw_url: str) -> str:
@@ -61,6 +88,15 @@ def validate_stream_source(raw_url: str) -> str:
         )
 
     host = parsed.hostname.lower()
+    if parsed.scheme.lower() in {"http", "https"} and not settings.ALLOW_HTTP_CAMERAS:
+        raise HTTPException(status_code=400, detail="HTTP-камеры отключены. Используйте RTSP или настройте доверенную HTTP-камеру отдельно.")
+    if not settings.DEV_MODE:
+        if host not in settings.CAMERA_ALLOWED_HOSTS:
+            raise HTTPException(status_code=400, detail="Добавьте IP камеры в CAMERA_ALLOWED_HOSTS на сервере")
+        try:
+            ipaddress.ip_address(host)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="В рабочем режиме требуется статический IP камеры, а не DNS-имя") from exc
     if host in BLOCKED_HOSTNAMES:
         raise HTTPException(status_code=400, detail=f"Хост '{host}' заблокирован защитой от SSRF")
 
@@ -73,9 +109,8 @@ def validate_stream_source(raw_url: str) -> str:
             infos = socket.getaddrinfo(host, None)
             for info in infos:
                 candidate_ips.append(ipaddress.ip_address(info[4][0]))
-        except Exception:
-            # В закрытой сети DNS-имя камеры может резолвиться позже, но запрещённые имена уже отсечены
-            pass
+        except socket.gaierror as exc:
+            raise HTTPException(status_code=400, detail="Не удалось разрешить DNS-имя камеры") from exc
 
     for ip_obj in candidate_ips:
         if ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_unspecified:
@@ -149,3 +184,24 @@ async def read_upload_limited(file: UploadFile, max_bytes: int) -> bytes:
         raise HTTPException(status_code=400, detail="Передан пустой файл")
 
     return b"".join(chunks)
+
+
+def read_upload_sync(file: UploadFile, max_bytes: int) -> bytes:
+    chunks = []
+    total = 0
+    while chunk := file.file.read(1024 * 1024):
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(status_code=413, detail="Превышен допустимый размер файла")
+        chunks.append(chunk)
+    if not total:
+        raise HTTPException(status_code=400, detail="Передан пустой файл")
+    return b"".join(chunks)
+
+
+def redact_stream_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme in {"sim", "demo", "lab"}:
+        return url
+    # Paths and query parameters may contain embedded access tokens too.
+    return parsed._replace(netloc=parsed.netloc.rsplit("@", 1)[-1], path="/…", query="", fragment="").geturl()

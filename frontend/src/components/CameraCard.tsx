@@ -4,6 +4,7 @@ import { Camera } from "../api/client";
 
 interface CameraCardProps {
   camera: Camera;
+  canManage: boolean;
   onToggle: (id: number) => void;
   onDelete: (id: number) => void;
   onSimulate: (
@@ -15,6 +16,7 @@ interface CameraCardProps {
 
 export const CameraCard: React.FC<CameraCardProps> = ({
   camera,
+  canManage,
   onToggle,
   onDelete,
   onSimulate,
@@ -49,6 +51,8 @@ export const CameraCard: React.FC<CameraCardProps> = ({
             className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold backdrop-blur-md ${
               !camera.is_active
                 ? "bg-slate-800/90 text-slate-300"
+                : !camera.online
+                ? "bg-slate-800/90 text-amber-300"
                 : hasThreat
                 ? "bg-red-600/95 text-white animate-pulse"
                 : "bg-slate-950/85 text-emerald-400 border border-emerald-500/30"
@@ -58,6 +62,8 @@ export const CameraCard: React.FC<CameraCardProps> = ({
               className={`w-1.5 h-1.5 rounded-full ${
                 !camera.is_active
                   ? "bg-slate-400"
+                  : !camera.online
+                  ? "bg-amber-400"
                   : hasThreat
                   ? "bg-white"
                   : "bg-emerald-400"
@@ -65,9 +71,11 @@ export const CameraCard: React.FC<CameraCardProps> = ({
             />
             {!camera.is_active
               ? "ПАУЗА"
+              : !camera.online
+              ? "НЕТ СВЯЗИ"
               : hasThreat
               ? "ТРЕВОГА В КАДРЕ"
-              : `LIVE · ${camera.fps > 0 ? camera.fps.toFixed(0) : 12} FPS`}
+              : `LIVE · ${camera.fps.toFixed(0)} FPS`}
           </span>
         </div>
 
@@ -81,6 +89,7 @@ export const CameraCard: React.FC<CameraCardProps> = ({
       </div>
 
       <div className="p-4 space-y-3">
+        {camera.last_error && <p className="text-xs text-red-300">{camera.last_error}</p>}
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <h3 className="font-semibold text-sm text-white truncate">{camera.name}</h3>
@@ -89,7 +98,7 @@ export const CameraCard: React.FC<CameraCardProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-1 shrink-0">
+          {canManage && <div className="flex items-center gap-1 shrink-0">
             <button
               onClick={() => onToggle(camera.id)}
               title={camera.is_active ? "Приостановить поток" : "Возобновить поток"}
@@ -104,10 +113,10 @@ export const CameraCard: React.FC<CameraCardProps> = ({
             >
               <Trash2 className="w-4 h-4" />
             </button>
-          </div>
+          </div>}
         </div>
 
-        {camera.is_simulated && camera.is_active && (
+        {canManage && camera.is_simulated && camera.is_active && (
           <div className="pt-2.5 border-t border-slate-800/80">
             <div className="flex items-center gap-1.5 text-[11px] text-slate-400 mb-2">
               <Sparkles className="w-3.5 h-3.5 text-indigo-400" />

@@ -1,44 +1,45 @@
 services:
   db:
     image: postgres:15-alpine
-    container_name: school_security_db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: school
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run python scripts/setup_env.py first}
       POSTGRES_DB: school_security
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U school -d school_security"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   redis:
     image: redis:7-alpine
-    container_name: school_security_redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    # No host port. Keep this service inside the trusted Compose network.
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   backend:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    container_name: school_security_backend
     restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/school_security
+    env_file: .env
+    environment: &backend_env
+      DATABASE_URL: postgresql+psycopg2://school:${POSTGRES_PASSWORD}@db:5432/school_security
       REDIS_URL: redis://redis:6379/0
-      YOLO_COCO_MODEL_PATH: /app/ml/models/yolov8n.pt
-      YOLO_WEAPON_MODEL_PATH: /app/ml/models/weapon_yolov8.pt
-      YOLO_CUSTOM_MODEL_PATH: /app/ml/models/school_security_best.pt
       MEDIA_ROOT: /app/media
+      ENABLE_LOCAL_TRAINING: "false"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./media:/app/media
       - ./ml:/app/ml
@@ -46,22 +47,21 @@ services:
       db:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
 
   celery_worker:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    container_name: school_security_worker
-    command: celery -A app.services.tasks.celery_app worker --loglevel=info
+    command: celery -A app.services.tasks.celery_app worker --loglevel=info --concurrency=1 --pool=solo
     restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/school_security
-      REDIS_URL: redis://redis:6379/0
-      YOLO_COCO_MODEL_PATH: /app/ml/models/yolov8n.pt
-      YOLO_WEAPON_MODEL_PATH: /app/ml/models/weapon_yolov8.pt
-      YOLO_CUSTOM_MODEL_PATH: /app/ml/models/school_security_best.pt
-      MEDIA_ROOT: /app/media
+    env_file: .env
+    environment: *backend_env
     volumes:
       - ./media:/app/media
       - ./ml:/app/ml
@@ -69,18 +69,19 @@ services:
       db:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: school_security_frontend
     restart: unless-stopped
     ports:
-      - "3000:80"
+      - "127.0.0.1:3000:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   postgres_data:
+  redis_data:

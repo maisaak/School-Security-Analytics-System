@@ -1,13 +1,14 @@
 import React from "react";
-import { BrainCircuit, ExternalLink, Shield, Upload, Video } from "lucide-react";
+import { BrainCircuit, ExternalLink, Settings, Shield, Upload, Video } from "lucide-react";
 
-export type AppTab = "dashboard" | "lab" | "training";
+export type AppTab = "dashboard" | "lab" | "training" | "settings";
 
 interface NavbarProps {
   activeTab: AppTab;
   onSelectTab: (tab: AppTab) => void;
   unacknowledgedCount: number;
   activeWeights: string;
+  role: "admin" | "operator" | "viewer";
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -15,11 +16,13 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSelectTab,
   unacknowledgedCount,
   activeWeights,
+  role,
 }) => {
   const tabs: Array<{ id: AppTab; label: string; icon: React.ElementType; badge?: number }> = [
     { id: "dashboard", label: "Мониторинг и инциденты", icon: Video, badge: unacknowledgedCount },
     { id: "lab", label: "Проверка фото / видео", icon: Upload },
-    { id: "training", label: "Дообучение YOLOv8", icon: BrainCircuit },
+    { id: "training", label: "Обучение YOLO", icon: BrainCircuit },
+    { id: "settings", label: "Настройки", icon: Settings },
   ];
 
   return (
@@ -36,7 +39,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               </h1>
               <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-emerald-500/10 text-emerald-300 border border-emerald-500/25">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                YOLOv8 Active
+                YOLO
               </span>
             </div>
             <p className="text-xs text-slate-400">
@@ -47,7 +50,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         <div className="flex items-center gap-3">
           <nav className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
-            {tabs.map(({ id, label, icon: Icon, badge }) => {
+            {tabs.filter(t => t.id !== "training" || role === "admin").filter(t => t.id !== "lab" || role !== "viewer").map(({ id, label, icon: Icon, badge }) => {
               const active = activeTab === id;
               return (
                 <button

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import threading
 import time
 from datetime import datetime
@@ -86,6 +87,7 @@ class ViolationDetector:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self.coco_model = YOLO(str(settings.YOLO_COCO_MODEL_PATH))
+        self.base_weights_name = Path(settings.YOLO_COCO_MODEL_PATH).name
         self.weapon_model = (
             YOLO(str(settings.YOLO_WEAPON_MODEL_PATH))
             if Path(settings.YOLO_WEAPON_MODEL_PATH).is_file()
@@ -134,6 +136,32 @@ class ViolationDetector:
             self.custom_model = loaded
             self._custom_mtime = mtime
             self.active_weights_name = target.name
+            self.reloaded_at = datetime.now().isoformat(timespec="seconds")
+
+    def activate_candidate(self, candidate: Path, target: Path) -> None:
+        """Load first, then replace the active file and in-memory model under one lock."""
+        loaded = YOLO(str(candidate))
+        if set(loaded.names.values()) != {"dog", "weapon", "suspicious_bag"}:
+            raise ValueError("Неверные классы модели")
+        with self._lock:
+            os.replace(candidate, target)
+            self.custom_model = loaded
+            self._custom_mtime = target.stat().st_mtime
+            self.active_weights_name = target.name
+            self.reloaded_at = datetime.now().isoformat(timespec="seconds")
+
+    def select_base_model(self, path: Path) -> None:
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        loaded = YOLO(str(path))
+        if loaded.task != "detect" or not {"person", "dog", "backpack", "handbag", "suitcase"}.issubset(set(loaded.names.values())):
+            raise ValueError("Требуется COCO detection модель")
+        loaded.predict(np.zeros((480, 480, 3), dtype=np.uint8), imgsz=480, verbose=False)
+        with self._lock:
+            self.coco_model = loaded
+            self.base_weights_name = path.name
+            if self.custom_model is None:
+                self.active_weights_name = path.name
             self.reloaded_at = datetime.now().isoformat(timespec="seconds")
 
     def detect_frame(self, frame: np.ndarray) -> dict:
@@ -312,7 +340,7 @@ class ViolationDetector:
 
         if camera_title:
             ts = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-            hud_text = f"● REC  {camera_title}   |   YOLOv8 ({self.active_weights_name}) · {analysis.get('latency_ms', 0):.0f} мс   |   {ts}"
+            hud_text = f"● REC  {camera_title}   |   YOLO ({self.base_weights_name}) · {analysis.get('latency_ms', 0):.0f} мс   |   {ts}"
             tb = draw.textbbox((0, 0), hud_text, font=FONT_HUD)
             draw.rounded_rectangle((14, 12, 30 + (tb[2] - tb[0]), 22 + (tb[3] - tb[1])), radius=6, fill=(10, 15, 28, 198))
             draw.text((22, 16), hud_text, font=FONT_HUD, fill=(226, 232, 240, 255))

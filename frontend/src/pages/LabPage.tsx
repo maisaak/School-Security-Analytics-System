@@ -5,7 +5,7 @@ import { VIOLATION_META } from "../components/ViolationsTable";
 
 export const LabPage: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [saveViolation, setSaveViolation] = useState(true);
+  const [saveViolation, setSaveViolation] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalyzeUploadResult | null>(null);
@@ -13,6 +13,7 @@ export const LabPage: React.FC = () => {
   const runAnalysis = async (file: File) => {
     setSelectedFile(file);
     setLoading(true);
+    setResult(null);
     setError(null);
     try {
       const res = await api.analyzeMedia(file, saveViolation);
@@ -51,6 +52,7 @@ export const LabPage: React.FC = () => {
           <input
             type="file"
             accept="image/*,video/*"
+            disabled={loading}
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
@@ -102,6 +104,7 @@ export const LabPage: React.FC = () => {
           </div>
         ) : (
           <div className="space-y-4">
+            {result.warning && <p className="text-xs text-amber-300">{result.warning}</p>}
             <div className="rounded-xl overflow-hidden bg-black border border-slate-800">
               {result.media_type === "video" ? (
                 <video
@@ -123,7 +126,7 @@ export const LabPage: React.FC = () => {
             {result.violations.length === 0 ? (
               <div className="p-3.5 rounded-xl bg-emerald-950/60 border border-emerald-700/50 text-xs text-emerald-200 flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
-                Запрещённых объектов и бесхозных сумок не обнаружено.
+                Детектор не выдал срабатываний. Это не гарантирует отсутствие опасных объектов.
               </div>
             ) : (
               <div className="space-y-2">

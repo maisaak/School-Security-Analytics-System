@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CameraCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
     name: str = Field(..., min_length=2, max_length=120, examples=["Камера №4 — Спортзал"])
     location: str = Field(default="Периметр школы", max_length=160)
     rtsp_url: str = Field(..., min_length=3, max_length=512, examples=["sim://hallway"])
@@ -24,6 +25,7 @@ class CameraOut(BaseModel):
     person_count: int = 0
     active_threats: list[str] = []
     is_simulated: bool = False
+    last_error: str | None = None
 
 
 class SimulateRequest(BaseModel):

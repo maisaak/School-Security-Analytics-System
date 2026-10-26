@@ -4,12 +4,14 @@ import { Violation } from "../api/client";
 import { VIOLATION_META } from "./ViolationsTable";
 
 interface VideoModalProps {
+  canAcknowledge: boolean;
   violation: Violation | null;
   onClose: () => void;
   onAcknowledge: (id: number) => void;
 }
 
 export const VideoModal: React.FC<VideoModalProps> = ({
+  canAcknowledge,
   violation,
   onClose,
   onAcknowledge,
@@ -46,7 +48,7 @@ export const VideoModal: React.FC<VideoModalProps> = ({
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
           <div className="lg:col-span-2 bg-black rounded-xl overflow-hidden border border-slate-800">
-            <video
+            {violation.video_url ? <video
               key={violation.video_url}
               src={violation.video_url}
               controls
@@ -54,7 +56,7 @@ export const VideoModal: React.FC<VideoModalProps> = ({
               loop
               playsInline
               className="w-full aspect-video object-contain bg-black"
-            />
+            /> : <img src={violation.image_path} alt="Фото инцидента — видеозапись не создавалась" className="w-full aspect-video object-contain" />}
           </div>
 
           <div className="space-y-3 bg-slate-950/80 border border-slate-800 rounded-xl p-3.5">
@@ -66,19 +68,20 @@ export const VideoModal: React.FC<VideoModalProps> = ({
             />
             <div className="pt-2 space-y-2">
               <button
+                disabled={violation.is_acknowledged || !canAcknowledge}
                 onClick={() => onAcknowledge(violation.id)}
                 className="w-full py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-medium text-white flex items-center justify-center gap-2 transition"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                {violation.is_acknowledged ? "Снять отметку проверки" : "Отметить как отработанный"}
+                {violation.is_acknowledged ? "Проверено" : "Отметить как отработанный"}
               </button>
               <a
-                href={violation.video_url}
-                download={`incident_${violation.id}.mp4`}
+                href={violation.video_url || violation.image_path}
+                download={`incident_${violation.id}.${violation.video_url ? "mp4" : "jpg"}`}
                 className="w-full py-2 px-3 rounded-xl border border-slate-700 hover:bg-slate-800 text-xs font-medium text-slate-200 flex items-center justify-center gap-2 transition"
               >
                 <Download className="w-4 h-4" />
-                Скачать H.264 MP4 фрагмент
+                {violation.video_url ? "Скачать MP4 фрагмент" : "Скачать фото"}
               </a>
             </div>
           </div>

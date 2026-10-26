@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+.compact-ui .gap-5 { gap: 0.75rem; }
+.compact-ui .space-y-8 > :not([hidden]) ~ :not([hidden]) { margin-top: 1rem; }
+.compact-ui td { padding-top: 0.35rem; padding-bottom: 0.35rem; }
+.compact-ui .p-5 { padding: 0.75rem; }
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

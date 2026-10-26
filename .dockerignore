@@ -1,0 +1,12 @@
+.venv
+**/__pycache__
+.pytest_cache
+.git
+.env
+media
+*.db*
+frontend/node_modules
+frontend/dist
+ml/runs
+ml/datasets/custom
+ml/models/candidates

@@ -13,6 +13,7 @@ export interface Camera {
   person_count: number;
   active_threats: string[];
   is_simulated: boolean;
+  last_error: string | null;
 }
 
 export interface Violation {
@@ -54,7 +55,7 @@ export interface DatasetInfo {
 
 export interface RetrainJob {
   id: number;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "ready" | "active";
   epochs: number;
   current_epoch: number;
   progress_pct: number;
@@ -73,17 +74,27 @@ export interface AnalyzeUploadResult {
   latency_ms?: number;
   frames_processed?: number;
   saved_violation_ids: number[];
+  warning?: string;
 }
 
 const API_BASE = "/api";
 
+export interface User { id: number | null; username: string; display_name: string; role: "admin" | "operator" | "viewer" }
+export interface Employee extends User { id: number; is_active: boolean }
+export interface Preferences { columns: 1 | 2 | 3 | 4; show_stats: boolean; show_archive: boolean; show_alerts: boolean; compact: boolean; default_tab: "dashboard" | "lab" | "training" | "settings" }
+export const defaultPreferences: Preferences = { columns: 3, show_stats: true, show_archive: true, show_alerts: true, compact: false, default_tab: "dashboard" };
+export interface ModelCatalog { active_base: string; custom_weights: string | null; models: Array<{ id: string; label: string; filename: string; installed: boolean }> }
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, init);
+  const headers = new Headers(init?.headers);
+  headers.set("X-Requested-With", "SchoolSecurity");
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: "same-origin" });
   if (!res.ok) {
+    if (res.status === 401 && path !== "/auth/login") window.dispatchEvent(new Event("session-expired"));
     let detail = `HTTP ${res.status}`;
     try {
       const data = await res.json();
-      if (data?.detail) detail = data.detail;
+      if (data?.detail) detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
     } catch {
       // ignore parse error
     }
@@ -96,6 +107,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  session: () => request<{ authenticated: boolean; dev_mode: boolean; user: User }>("/auth/session"),
+  loginEmployee: (username: string, password: string) => request("/auth/login", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }),
+  }),
+  getPreferences: () => request<Preferences>("/preferences"),
+  setPreferences: (value: Preferences) => request<Preferences>("/preferences", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value) }),
+  getEmployees: () => request<Employee[]>("/employees"),
+  createEmployee: (value: { username: string; display_name: string; password: string; role: string }) => request<Employee>("/employees", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value) }),
+  updateEmployee: (id: number, value: { is_active?: boolean; role?: string; password?: string }) => request<Employee>(`/employees/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value) }),
+  modelCatalog: () => request<ModelCatalog>("/models/catalog"),
+  selectModel: (model_id: string, allow_download: boolean) => request<ModelCatalog>("/models/select", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model_id, allow_download }) }),
+  login: (key: string) => request("/auth/login", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_key: key }),
+  }),
+  logout: () => request("/auth/logout", { method: "POST" }),
   getStats: () => request<DashboardStats>("/stats"),
 
   getCameras: () => request<Camera[]>("/cameras"),
@@ -154,10 +180,12 @@ export const api = {
 
   getDatasetInfo: () => request<DatasetInfo>("/models/dataset"),
 
-  uploadDatasetSample: (file: File, violationType: ViolationType) => {
+  uploadDatasetSample: (file: File, violationType: ViolationType, bbox: number[], split: string) => {
     const form = new FormData();
     form.append("file", file);
     form.append("violation_type", violationType);
+    form.append("bbox", JSON.stringify(bbox));
+    form.append("split", split);
     return request<{ status: string; filename: string; dataset: DatasetInfo }>(
       "/models/dataset/upload",
       { method: "POST", body: form }
@@ -165,6 +193,7 @@ export const api = {
   },
 
   getRetrainJobs: () => request<RetrainJob[]>("/models/jobs"),
+  activateModel: (id: number) => request(`/models/jobs/${id}/activate`, { method: "POST" }),
 
   retrainModel: (epochs: number, datasetYaml = "ml/datasets/school_security.yaml") =>
     request<RetrainJob>("/models/retrain", {
