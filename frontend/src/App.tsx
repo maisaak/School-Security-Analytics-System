@@ -25,6 +25,7 @@ export default function App() {
   const [adminLogin, setAdminLogin] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [loginBusy, setLoginBusy] = useState(false);
+  const [loginFieldError, setLoginFieldError] = useState<string | null>(null);
   const accentRgb = (() => {
     const legacy: Record<string, string> = { indigo: "#6366f1", blue: "#3b82f6", emerald: "#10b981", violet: "#8b5cf6", rose: "#f43f5e" };
     const hex = legacy[appearance.accent] ?? appearance.accent;
@@ -58,8 +59,11 @@ export default function App() {
   if (!authenticated) return (
     <main className="login-shell">
       <div className="login-glow login-glow-one" /><div className="login-glow login-glow-two" />
-      <form className="login-card" onSubmit={async (e) => {
-        e.preventDefault(); setError(null); setLoginBusy(true);
+      <form className="login-card" noValidate onSubmit={async (e) => {
+        e.preventDefault(); setError(null); setLoginFieldError(null);
+        const missing = adminLogin ? !key.trim() : !username.trim() ? "Введите логин" : !password ? "Введите пароль" : null;
+        if (missing) { setLoginFieldError(missing === true ? "Заполните это поле" : missing); return; }
+        setLoginBusy(true);
         try { if (adminLogin) await api.login(key); else await api.loginEmployee(username, password); setKey(""); setPassword(""); await loadSession(); }
         catch (err) { setError(err instanceof Error ? err.message : "Ошибка входа"); }
         finally { setLoginBusy(false); }
@@ -70,9 +74,9 @@ export default function App() {
           <button type="button" className={!adminLogin ? "active" : ""} onClick={() => { setAdminLogin(false); setError(null); }}><UserRound /> Сотрудник</button>
           <button type="button" className={adminLogin ? "active" : ""} onClick={() => { setAdminLogin(true); setError(null); }}><KeyRound /> API-ключ</button>
         </div>
-        {adminLogin ? <label className="login-field"><span>Ключ администратора</span><div className="login-input-wrap"><KeyRound /><input type="password" autoComplete="current-password" placeholder="Введите ключ доступа" value={key} onChange={(e) => setKey(e.target.value)} required /></div></label> : <>
-          <label className="login-field"><span>Логин</span><div className="login-input-wrap"><UserRound /><input autoComplete="username" placeholder="Введите логин" value={username} onChange={e => setUsername(e.target.value)} required /></div></label>
-          <label className="login-field"><span>Пароль</span><div className="login-input-wrap"><LockKeyhole /><input type={showPassword ? "text" : "password"} autoComplete="current-password" placeholder="Введите пароль" value={password} onChange={e => setPassword(e.target.value)} required /><button type="button" className="login-password-toggle" aria-label={showPassword ? "Скрыть пароль" : "Показать пароль"} onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff /> : <Eye />}</button></div></label>
+        {adminLogin ? <label className={`login-field ${loginFieldError ? "has-error" : ""}`}><span>Ключ администратора</span><div className="login-input-wrap"><KeyRound /><input type="password" autoComplete="current-password" placeholder="Введите ключ доступа" value={key} onChange={(e) => { setKey(e.target.value); setLoginFieldError(null); }} /></div>{loginFieldError && <small className="login-field-error">{loginFieldError}</small>}</label> : <>
+          <label className={`login-field ${loginFieldError && !username.trim() ? "has-error" : ""}`}><span>Логин</span><div className="login-input-wrap"><UserRound /><input autoComplete="username" placeholder="Введите логин" value={username} onChange={e => { setUsername(e.target.value); setLoginFieldError(null); }} /></div>{loginFieldError && !username.trim() && <small className="login-field-error">{loginFieldError}</small>}</label>
+          <label className={`login-field ${loginFieldError && username.trim() && !password ? "has-error" : ""}`}><span>Пароль</span><div className="login-input-wrap"><LockKeyhole /><input type={showPassword ? "text" : "password"} autoComplete="current-password" placeholder="Введите пароль" value={password} onChange={e => { setPassword(e.target.value); setLoginFieldError(null); }} /><button type="button" className="login-password-toggle" aria-label={showPassword ? "Скрыть пароль" : "Показать пароль"} onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff /> : <Eye />}</button></div>{loginFieldError && username.trim() && !password && <small className="login-field-error">{loginFieldError}</small>}</label>
         </>}
         {error && <p role="alert" className="login-error">{error}</p>}
         <button className="login-submit" type="submit" disabled={loginBusy}>{loginBusy ? <><span className="login-spinner" />Проверяем данные…</> : "Войти в систему"}</button>
