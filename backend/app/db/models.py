@@ -39,6 +39,10 @@ class Violation(Base):
     image_path = Column(String(512), nullable=False)
     video_path = Column(String(512), nullable=True)
     is_acknowledged = Column(Boolean, default=False, nullable=False)
+    review_status = Column(String(24), default="new", nullable=False, index=True)
+    review_comment = Column(Text, default="", nullable=False)
+    reviewed_by = Column(String(120), nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
     detected_at = Column(DateTime(timezone=True), default=utcnow, index=True, nullable=False)
 
     camera = relationship("Camera", back_populates="violations")
@@ -80,3 +84,16 @@ class AppSetting(Base):
     __tablename__ = "app_settings"
     key = Column(String(128), primary_key=True)
     value = Column(Text, nullable=False)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id = Column(Integer, primary_key=True)
+    employee_id = Column(Integer, nullable=True, index=True)
+    username = Column(String(64), nullable=False, default="system")
+    action = Column(String(32), nullable=False, index=True)
+    method = Column(String(12), nullable=False)
+    path = Column(String(256), nullable=False)
+    status_code = Column(Integer, nullable=False)
+    ip_address = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)

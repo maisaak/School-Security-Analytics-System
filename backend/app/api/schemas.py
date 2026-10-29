@@ -43,7 +43,16 @@ class ViolationOut(BaseModel):
     image_path: str
     video_url: str
     is_acknowledged: bool
+    review_status: str = "new"
+    review_comment: str = ""
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
     detected_at: datetime
+
+
+class ViolationReview(BaseModel):
+    status: Literal["new", "in_review", "confirmed", "false_alarm", "closed"]
+    comment: str = Field(default="", max_length=2000)
 
 
 class RetrainRequest(BaseModel):

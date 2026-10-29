@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     VIOLATION_COOLDOWN_SEC: int = 12
 
     MEDIA_ROOT: Path = PROJECT_ROOT / "media"
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID: str = ""
+    NOTIFICATION_WEBHOOK_URL: str = ""
+    NOTIFICATION_COOLDOWN_SEC: int = 60
+    NOTIFICATION_TIMEOUT_SEC: int = 5
 
     model_config = SettingsConfigDict(
         env_file=str(PROJECT_ROOT / ".env"),

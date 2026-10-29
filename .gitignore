@@ -34,3 +34,7 @@ ml/models/active.pt
 .env.*
 !.env.example
 .DS_Store
+*.log
+.backend.pid
+.frontend.pid
+backups/

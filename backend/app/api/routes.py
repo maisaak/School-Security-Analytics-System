@@ -13,10 +13,10 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.api.schemas import CameraCreate, CameraOut, RetrainJobOut, RetrainRequest, SimulateRequest, ViolationOut
+from app.api.schemas import CameraCreate, CameraOut, RetrainJobOut, RetrainRequest, SimulateRequest, ViolationOut, ViolationReview
 from app.core.config import PROJECT_ROOT, settings
 from app.core.security import read_upload_sync, redact_stream_url, safe_delete_media_file, validate_dataset_yaml, validate_stream_source, verify_api_key, require_admin
-from app.db.models import Camera, RetrainJob, Violation
+from app.db.models import AuditLog, Camera, RetrainJob, Violation
 from app.db.session import get_db
 from app.models.detector import detector
 from app.services.media_analysis import analyze_media, decode_image
@@ -36,7 +36,7 @@ def _serialize_camera(cam: Camera) -> CameraOut:
 
 
 def _serialize_violation(v: Violation) -> ViolationOut:
-    return ViolationOut(id=v.id, camera_id=v.camera_id, camera_name=v.camera.name if v.camera else "Архив", camera_location=v.camera.location if v.camera else "Архив", violation_type=v.violation_type, confidence=v.confidence, bbox=json.loads(v.bbox_json or "[]"), image_path=v.image_path, video_url=f"/api/violations/{v.id}/video" if v.video_path else "", is_acknowledged=v.is_acknowledged, detected_at=v.detected_at.replace(tzinfo=timezone.utc) if v.detected_at.tzinfo is None else v.detected_at)
+    return ViolationOut(id=v.id, camera_id=v.camera_id, camera_name=v.camera.name if v.camera else "Архив", camera_location=v.camera.location if v.camera else "Архив", violation_type=v.violation_type, confidence=v.confidence, bbox=json.loads(v.bbox_json or "[]"), image_path=v.image_path, video_url=f"/api/violations/{v.id}/video" if v.video_path else "", is_acknowledged=v.is_acknowledged, review_status=v.review_status, review_comment=v.review_comment, reviewed_by=v.reviewed_by, reviewed_at=v.reviewed_at, detected_at=v.detected_at.replace(tzinfo=timezone.utc) if v.detected_at.tzinfo is None else v.detected_at)
 
 
 def _serialize_job(job: RetrainJob) -> RetrainJobOut:
@@ -131,12 +131,16 @@ async def stream_camera(camera_id: int, request: Request):
 
 
 @router.get("/violations", response_model=list[ViolationOut])
-def list_violations(violation_type: str | None = None, camera_id: int | None = None, unacknowledged_only: bool = False, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
+def list_violations(violation_type: str | None = None, camera_id: int | None = None, review_status: str | None = None, unacknowledged_only: bool = False, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
     query = db.query(Violation)
     if violation_type:
         query = query.filter(Violation.violation_type == violation_type)
     if camera_id is not None:
         query = query.filter(Violation.camera_id == camera_id)
+    if review_status:
+        if review_status not in {"new", "in_review", "confirmed", "false_alarm", "closed"}:
+            raise HTTPException(status_code=422, detail="Неизвестный статус проверки")
+        query = query.filter(Violation.review_status == review_status)
     if unacknowledged_only:
         query = query.filter(Violation.is_acknowledged.is_(False))
     return [_serialize_violation(v) for v in query.order_by(Violation.detected_at.desc(), Violation.id.desc()).offset(offset).limit(limit).all()]
@@ -148,7 +152,23 @@ def acknowledge_violation(violation_id: int, db: Session = Depends(get_db)):
     if not row:
         raise HTTPException(status_code=404, detail="Инцидент не найден")
     row.is_acknowledged = True  # Idempotent acknowledgement, not a toggle.
+    row.review_status = "confirmed"
     db.commit()
+    return _serialize_violation(row)
+
+
+@router.patch("/violations/{violation_id}/review", response_model=ViolationOut)
+def review_violation(violation_id: int, payload: ViolationReview, request: Request, db: Session = Depends(get_db)):
+    row = db.get(Violation, violation_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Инцидент не найден")
+    row.review_status = payload.status
+    row.review_comment = payload.comment.strip()
+    row.is_acknowledged = payload.status in {"confirmed", "false_alarm", "closed"}
+    row.reviewed_by = request.state.principal.get("display_name") or request.state.principal.get("username")
+    row.reviewed_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(row)
     return _serialize_violation(row)
 
 
@@ -192,6 +212,12 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
         timeline.append({"label": end.astimezone().strftime("%H:%M"), "count": sum(start <= (v.detected_at.replace(tzinfo=timezone.utc) if v.detected_at.tzinfo is None else v.detected_at) < end for v in viols)})
     latencies = [stream_manager.get_telemetry(c.id)["latency_ms"] for c in cams if c.is_active]
     return {"total_cameras": len(cams), "active_cameras": sum(stream_manager.get_telemetry(c.id)["online"] for c in cams), "total_violations": len(viols), "unacknowledged_violations": sum(not v.is_acknowledged for v in viols), "average_confidence": round(sum(v.confidence for v in viols) / len(viols), 4) if viols else 0, "by_type": by_type, "timeline": timeline, "model": {"active_weights": detector.active_weights_name, "reloaded_at": detector.reloaded_at, "avg_latency_ms": round(sum(latencies) / len(latencies), 1) if latencies else 0}}
+
+
+@router.get("/audit", dependencies=[Depends(require_admin)])
+def list_audit_logs(limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
+    rows = db.query(AuditLog).order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).offset(offset).limit(limit).all()
+    return [{"id": row.id, "employee_id": row.employee_id, "username": row.username, "action": row.action, "method": row.method, "path": row.path, "status_code": row.status_code, "ip_address": row.ip_address, "created_at": row.created_at} for row in rows]
 
 
 @router.get("/models/dataset", dependencies=[Depends(require_admin)])

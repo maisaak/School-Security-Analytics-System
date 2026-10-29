@@ -7,6 +7,7 @@ import { TrainingPage } from "./pages/TrainingPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
 export default function App() {
+  const displayMode = window.location.pathname === "/display";
   const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
   const [globalStats, setGlobalStats] = useState<DashboardStats | null>(null);
   const [authenticated, setAuthenticated] = useState(false);
@@ -63,20 +64,20 @@ export default function App() {
 
   return (
     <div className={`min-h-screen bg-slate-950 text-slate-100 flex flex-col ${preferences.compact ? "compact-ui" : ""}`}>
-      <Navbar
+      {!displayMode && <Navbar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         unacknowledgedCount={globalStats?.unacknowledged_violations ?? 0}
         activeWeights={globalStats?.model.active_weights ?? "Ожидание модели"}
         role={user?.role ?? "viewer"}
-      />
+      />}
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
-        <div className="flex justify-between items-center gap-4 mb-5 text-xs text-slate-400">
+      <main className={`flex-1 w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 ${displayMode ? "max-w-[1800px]" : "max-w-7xl"}`}>
+        {!displayMode && <div className="flex justify-between items-center gap-4 mb-5 text-xs text-slate-400">
           <span>Автоматические срабатывания требуют проверки человеком. Отсутствие тревоги не гарантирует безопасность.</span>
           <button onClick={async () => { await api.logout(); setAuthenticated(false); setGlobalStats(null); setUser(null); }} className="border border-slate-700 rounded-lg px-3 py-2 shrink-0">{user?.display_name} · Выйти</button>
-        </div>
-        {activeTab === "dashboard" && <DashboardPage onGlobalStatsUpdate={setGlobalStats} preferences={preferences} role={user?.role ?? "viewer"} />}
+        </div>}
+        {(displayMode || activeTab === "dashboard") && <DashboardPage onGlobalStatsUpdate={setGlobalStats} preferences={preferences} role={user?.role ?? "viewer"} displayMode={displayMode} />}
         {activeTab === "lab" && user?.role !== "viewer" && <LabPage />}
         {activeTab === "training" && user?.role === "admin" && <TrainingPage />}
         {activeTab === "settings" && user && <SettingsPage user={user} preferences={preferences} onPreferences={setPreferences} />}

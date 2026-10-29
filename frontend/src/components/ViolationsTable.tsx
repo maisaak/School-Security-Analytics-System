@@ -28,11 +28,14 @@ interface ViolationsTableProps {
   filterType: string;
   filterCameraId: number | undefined;
   onlyUnack: boolean;
+  reviewStatus: string;
   onChangeType: (value: string) => void;
   onChangeCamera: (cameraId: number | undefined) => void;
   onChangeUnack: (value: boolean) => void;
+  onChangeReviewStatus: (value: string) => void;
   onOpenVideo: (violation: Violation) => void;
   onAcknowledge: (id: number) => void;
+  onReview: (id: number, status: Violation["review_status"], comment: string) => void;
   onDelete: (id: number) => void;
 }
 
@@ -44,11 +47,14 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
   filterType,
   filterCameraId,
   onlyUnack,
+  reviewStatus,
   onChangeType,
   onChangeCamera,
   onChangeUnack,
+  onChangeReviewStatus,
   onOpenVideo,
   onAcknowledge,
+  onReview,
   onDelete,
 }) => {
   return (
@@ -95,6 +101,14 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
             />
             Неподтверждённые
           </label>
+          <select value={reviewStatus} onChange={(e) => onChangeReviewStatus(e.target.value)} className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
+            <option value="">Все статусы</option>
+            <option value="new">Новые</option>
+            <option value="in_review">На проверке</option>
+            <option value="confirmed">Подтверждённые</option>
+            <option value="false_alarm">Ложные тревоги</option>
+            <option value="closed">Закрытые</option>
+          </select>
         </div>
       </div>
 
@@ -166,6 +180,23 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
                       {new Date(v.detected_at).toLocaleString("ru-RU")}
                     </td>
                     <td className="py-3 px-2.5">
+                      <select
+                        value={v.review_status}
+                        disabled={!canAcknowledge}
+                        onChange={(event) => {
+                          const status = event.target.value as Violation["review_status"];
+                          const comment = window.prompt("Комментарий к решению (необязательно):", v.review_comment) ?? v.review_comment;
+                          onReview(v.id, status, comment);
+                        }}
+                        aria-label={`Статус инцидента ${v.id}`}
+                        className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200"
+                      >
+                        <option value="new">Новое</option>
+                        <option value="in_review">На проверке</option>
+                        <option value="confirmed">Подтверждено</option>
+                        <option value="false_alarm">Ложная тревога</option>
+                        <option value="closed">Закрыто</option>
+                      </select>
                       <button
                         onClick={() => onAcknowledge(v.id)}
                         disabled={!canAcknowledge || v.is_acknowledged}

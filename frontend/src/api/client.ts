@@ -27,6 +27,10 @@ export interface Violation {
   image_path: string;
   video_url: string;
   is_acknowledged: boolean;
+  review_status: "new" | "in_review" | "confirmed" | "false_alarm" | "closed";
+  review_comment: string;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
   detected_at: string;
 }
 
@@ -84,6 +88,8 @@ export interface Employee extends User { id: number; is_active: boolean }
 export interface Preferences { columns: 1 | 2 | 3 | 4; show_stats: boolean; show_archive: boolean; show_alerts: boolean; compact: boolean; default_tab: "dashboard" | "lab" | "training" | "settings" }
 export const defaultPreferences: Preferences = { columns: 3, show_stats: true, show_archive: true, show_alerts: true, compact: false, default_tab: "dashboard" };
 export interface ModelCatalog { active_base: string; custom_weights: string | null; models: Array<{ id: string; label: string; filename: string; installed: boolean }> }
+export interface AuditEntry { id: number; employee_id: number | null; username: string; action: string; method: string; path: string; status_code: number; ip_address: string | null; created_at: string }
+export interface Diagnostics { status: string; api: string; database: string; model: { base: string; active: string; path_exists: boolean }; disk: { free_bytes: number; total_bytes: number; free_percent: number }; training: { running_jobs: number; local_enabled: boolean }; cameras: Array<{ id: number; name: string; active: boolean; online: boolean; fps: number; latency_ms: number; last_error: string | null }> }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
@@ -114,6 +120,8 @@ export const api = {
   getPreferences: () => request<Preferences>("/preferences"),
   setPreferences: (value: Preferences) => request<Preferences>("/preferences", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value) }),
   getEmployees: () => request<Employee[]>("/employees"),
+  getAudit: (limit = 100) => request<AuditEntry[]>(`/audit?limit=${limit}`),
+  getDiagnostics: () => request<Diagnostics>("/system/diagnostics"),
   createEmployee: (value: { username: string; display_name: string; password: string; role: string }) => request<Employee>("/employees", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value) }),
   updateEmployee: (id: number, value: { is_active?: boolean; role?: string; password?: string }) => request<Employee>(`/employees/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value) }),
   modelCatalog: () => request<ModelCatalog>("/models/catalog"),
@@ -152,11 +160,13 @@ export const api = {
   getViolations: (params?: {
     violation_type?: string;
     camera_id?: number;
+    review_status?: string;
     unacknowledged_only?: boolean;
   }) => {
     const q = new URLSearchParams();
     if (params?.violation_type) q.set("violation_type", params.violation_type);
     if (params?.camera_id) q.set("camera_id", String(params.camera_id));
+    if (params?.review_status) q.set("review_status", params.review_status);
     if (params?.unacknowledged_only) q.set("unacknowledged_only", "true");
     const suffix = q.toString() ? `?${q.toString()}` : "";
     return request<Violation[]>(`/violations${suffix}`);
@@ -164,6 +174,8 @@ export const api = {
 
   acknowledgeViolation: (id: number) =>
     request<Violation>(`/violations/${id}/ack`, { method: "PATCH" }),
+  reviewViolation: (id: number, status: Violation["review_status"], comment: string) =>
+    request<Violation>(`/violations/${id}/review`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status, comment }) }),
 
   deleteViolation: (id: number) =>
     request<void>(`/violations/${id}`, { method: "DELETE" }),

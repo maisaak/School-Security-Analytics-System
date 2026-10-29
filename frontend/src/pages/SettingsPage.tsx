@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api, Employee, ModelCatalog, Preferences, User } from "../api/client";
+import { api, AuditEntry, Diagnostics, Employee, ModelCatalog, Preferences, User } from "../api/client";
 
 interface Props { user: User; preferences: Preferences; onPreferences: (value: Preferences) => void }
 const input = "bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm w-full";
@@ -17,10 +17,14 @@ export function SettingsPage({ user, preferences, onPreferences }: Props) {
   const [newUser, setNewUser] = useState({ username: "", display_name: "", password: "", role: "viewer" });
   const [resetId, setResetId] = useState<number | null>(null);
   const [newPassword, setNewPassword] = useState("");
+  const [audit, setAudit] = useState<AuditEntry[]>([]);
+  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
 
   useEffect(() => {
     api.modelCatalog().then(c => { setCatalog(c); setModel(c.models.find(m => m.filename === c.active_base)?.id ?? "yolov8n"); }).catch(e => setError(e.message));
     if (user.role === "admin") api.getEmployees().then(setEmployees).catch(e => setError(e.message));
+    if (user.role === "admin") api.getAudit(100).then(setAudit).catch(e => setError(e.message));
+    if (user.role === "admin") api.getDiagnostics().then(setDiagnostics).catch(e => setError(e.message));
   }, [user.role]);
 
   async function run(action: () => Promise<void>) {
@@ -87,6 +91,22 @@ export function SettingsPage({ user, preferences, onPreferences }: Props) {
         <input required type="password" minLength={12} maxLength={256} autoComplete="new-password" aria-label="Новый пароль" placeholder="Новый пароль (12+ символов)" value={newPassword} onChange={e => setNewPassword(e.target.value)} className={input} />
         <button disabled={busy} className="bg-indigo-600 rounded-lg p-2">Сохранить</button><button type="button" onClick={() => setResetId(null)}>Отмена</button>
       </form>}
+    </section>}
+
+    {user.role === "admin" && <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h3 className="text-lg font-semibold">Журнал действий</h3><p className="text-xs text-slate-400">Последние изменения, подтверждения и операции администраторов.</p></div>
+        <button className="border border-slate-700 rounded-lg px-3 py-2 text-sm" onClick={() => run(async () => setAudit(await api.getAudit(100)))}>Обновить</button>
+      </div>
+      <div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="text-left text-slate-400 border-b border-slate-700"><th className="p-2">Время</th><th className="p-2">Пользователь</th><th className="p-2">Метод</th><th className="p-2">Путь</th><th className="p-2">Результат</th><th className="p-2">IP</th></tr></thead><tbody>
+        {audit.map(entry => <tr key={entry.id} className="border-b border-slate-800"><td className="p-2 whitespace-nowrap">{new Date(entry.created_at).toLocaleString()}</td><td className="p-2">{entry.username}</td><td className="p-2">{entry.method}</td><td className="p-2 font-mono">{entry.path}</td><td className={`p-2 ${entry.status_code >= 400 ? "text-red-300" : "text-emerald-300"}`}>{entry.status_code}</td><td className="p-2">{entry.ip_address ?? "—"}</td></tr>)}
+        {audit.length === 0 && <tr><td colSpan={6} className="p-4 text-center text-slate-500">Записей пока нет</td></tr>}
+      </tbody></table></div>
+    </section>}
+
+    {user.role === "admin" && <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-semibold">Диагностика системы</h3><p className="text-xs text-slate-400">Состояние камер, диска, модели и обучения.</p></div><button className="border border-slate-700 rounded-lg px-3 py-2 text-sm" onClick={() => run(async () => setDiagnostics(await api.getDiagnostics()))}>Обновить</button></div>
+      {diagnostics && <><div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm"><div className="rounded-xl bg-slate-950 p-3">API: <strong className="text-emerald-300">{diagnostics.api}</strong></div><div className="rounded-xl bg-slate-950 p-3">БД: <strong className="text-emerald-300">{diagnostics.database}</strong></div><div className="rounded-xl bg-slate-950 p-3">Свободно: <strong>{diagnostics.disk.free_percent}%</strong></div><div className="rounded-xl bg-slate-950 p-3">Обучение: <strong>{diagnostics.training.running_jobs ? "идёт" : "свободно"}</strong></div></div><p className="text-xs text-slate-400">Базовая модель: {diagnostics.model.base} · Активная: {diagnostics.model.active} · Файл: {diagnostics.model.path_exists ? "найден" : "не найден"}</p><div className="space-y-2">{diagnostics.cameras.map(camera => <div key={camera.id} className="flex flex-wrap gap-3 items-center border-t border-slate-800 pt-2 text-sm"><span className={camera.online ? "text-emerald-300" : "text-red-300"}>●</span><span className="flex-1">{camera.name}</span><span>{camera.online ? `${camera.fps.toFixed(1)} FPS · ${camera.latency_ms.toFixed(0)} мс` : camera.last_error ?? "Нет связи"}</span></div>)}</div></>}
     </section>}
   </div>;
 }

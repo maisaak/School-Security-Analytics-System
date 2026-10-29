@@ -11,9 +11,10 @@ interface DashboardPageProps {
   onGlobalStatsUpdate: (stats: DashboardStats) => void;
   preferences: Preferences;
   role: User["role"];
+  displayMode?: boolean;
 }
 
-export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdate, preferences, role }) => {
+export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdate, preferences, role, displayMode = false }) => {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [violations, setViolations] = useState<Violation[]>([]);
@@ -21,6 +22,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
   const [filterType, setFilterType] = useState("");
   const [filterCameraId, setFilterCameraId] = useState<number | undefined>(undefined);
   const [onlyUnack, setOnlyUnack] = useState(false);
+  const [reviewStatus, setReviewStatus] = useState("");
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [expandedCamera, setExpandedCamera] = useState<Camera | null>(null);
@@ -28,6 +30,23 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
   const [latestAlert, setLatestAlert] = useState<Violation | null>(null);
   const highestSeenId = useRef<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!displayMode || !latestAlert) return;
+    try {
+      const context = new AudioContext();
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.frequency.value = 740;
+      gain.gain.setValueAtTime(0.0001, context.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.16, context.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.45);
+      oscillator.connect(gain).connect(context.destination);
+      oscillator.start();
+      oscillator.stop(context.currentTime + 0.46);
+      window.setTimeout(() => void context.close(), 600);
+    } catch { /* Audio may be unavailable or blocked by the browser. */ }
+  }, [displayMode, latestAlert]);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -37,6 +56,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
         api.getViolations({
           violation_type: filterType || undefined,
           camera_id: filterCameraId,
+          review_status: reviewStatus || undefined,
           unacknowledged_only: onlyUnack,
         }),
       ]);
@@ -58,7 +78,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
     } catch (err) {
       setError(err instanceof Error ? err.message : "Нет связи с сервером");
     }
-  }, [filterType, filterCameraId, onlyUnack, onGlobalStatsUpdate]);
+  }, [filterType, filterCameraId, reviewStatus, onlyUnack, onGlobalStatsUpdate]);
 
   useEffect(() => {
     fetchAll();
@@ -75,6 +95,15 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
     }
     fetchAll();
     } catch (err) { setError(err instanceof Error ? err.message : "Ошибка подтверждения"); }
+  };
+
+  const handleReview = async (id: number, status: Violation["review_status"], comment: string) => {
+    try {
+      const updated = await api.reviewViolation(id, status, comment);
+      setViolations((prev) => prev.map((v) => (v.id === id ? updated : v)));
+      if (activeVideo?.id === id) setActiveVideo(updated);
+      fetchAll();
+    } catch (err) { setError(err instanceof Error ? err.message : "Ошибка изменения статуса"); }
   };
 
   return (
@@ -119,25 +148,25 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
         </div>
       )}
 
-      {preferences.show_stats && <StatsOverview stats={stats} />}
+      {!displayMode && preferences.show_stats && <StatsOverview stats={stats} />}
 
       <section className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-lg font-semibold text-white">Видеостена реального времени</h2>
-            <p className="text-xs text-slate-400">
+            <h2 className={displayMode ? "text-2xl font-semibold text-white" : "text-lg font-semibold text-white"}>Видеостена реального времени</h2>
+            {!displayMode && <p className="text-xs text-slate-400">
               Потоковый мониторинг камер школы с автоматической классификацией объектов и проверкой бесхозных сумок
-            </p>
+            </p>}
           </div>
 
           <div className="flex items-center gap-2.5">
-            <button
+            {!displayMode && <button
               onClick={fetchAll}
               className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300 transition"
               title="Обновить данные"
             >
               <RefreshCw className="w-4 h-4" />
-            </button>
+            </button>}
             {role === "admin" && <button
               onClick={() => setShowAddModal(true)}
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-sm font-medium text-white transition shadow-sm"
@@ -178,7 +207,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
         </div>
       </section>
 
-      {preferences.show_archive && <ViolationsTable
+      {!displayMode && preferences.show_archive && <ViolationsTable
         canAcknowledge={role !== "viewer"}
         canDelete={role === "admin"}
         violations={violations}
@@ -186,11 +215,14 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
         filterType={filterType}
         filterCameraId={filterCameraId}
         onlyUnack={onlyUnack}
+        reviewStatus={reviewStatus}
         onChangeType={setFilterType}
         onChangeCamera={setFilterCameraId}
         onChangeUnack={setOnlyUnack}
+        onChangeReviewStatus={setReviewStatus}
         onOpenVideo={setActiveVideo}
         onAcknowledge={handleAcknowledge}
+        onReview={handleReview}
         onDelete={async (id) => {
           if (!window.confirm("Удалить инцидент и его медиафайлы?")) return;
           try {

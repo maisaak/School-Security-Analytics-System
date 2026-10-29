@@ -21,6 +21,7 @@ from app.models.detector import detector
 from app.services.simulator import RealisticCCTVSimulator
 from app.services.event_policy import EventPolicy
 from app.services.video_capture import LatestFrameCapture
+from app.services.notifications import notify_incident
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +170,7 @@ class CameraWorker(threading.Thread):
             )
             db.add(row)
             db.commit()
+            notify_incident(v_type, self.name, confidence)
 
             # Retention runs in one maintenance worker, including laboratory uploads.
         except Exception:

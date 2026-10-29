@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import threading
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 
@@ -10,12 +10,14 @@ from app.api.routes import router
 from app.api.auth import router as auth_router
 from app.api.employees import router as employees_router
 from app.api.settings import router as settings_router, MODEL_CATALOG
+from app.api.diagnostics import router as diagnostics_router
 from app.core.config import settings
 from app.core.security import verify_api_key
-from app.db.models import AppSetting, Camera, RetrainJob
+from app.db.models import AppSetting, AuditLog, Camera, RetrainJob
 from app.models.detector import detector
 from app.core.config import PROJECT_ROOT
 from app.db.session import Base, SessionLocal, engine
+from sqlalchemy import inspect, text
 from app.services.stream_manager import stream_manager
 from app.services.maintenance import run_maintenance
 
@@ -41,6 +43,7 @@ DEFAULT_CAMERAS = [
 def _seed_initial_state() -> None:
     db = SessionLocal()
     try:
+        _ensure_compatibility_columns()
         saved_model = db.get(AppSetting, "base_model")
         if saved_model and saved_model.value in {e["filename"] for e in MODEL_CATALOG.values()}:
             target = PROJECT_ROOT / "ml" / "models" / saved_model.value
@@ -61,6 +64,24 @@ def _seed_initial_state() -> None:
             stream_manager.start_camera(cam.id, cam.name, cam.rtsp_url, is_active=cam.is_active)
     finally:
         db.close()
+
+
+def _ensure_compatibility_columns() -> None:
+    """Small SQLite/PostgreSQL migration for installations created before review workflow."""
+    inspector = inspect(engine)
+    if "violations" not in inspector.get_table_names():
+        return
+    existing = {column["name"] for column in inspector.get_columns("violations")}
+    additions = {
+        "review_status": "VARCHAR(24) NOT NULL DEFAULT 'new'",
+        "review_comment": "TEXT NOT NULL DEFAULT ''",
+        "reviewed_by": "VARCHAR(120)",
+        "reviewed_at": "TIMESTAMP",
+    }
+    with engine.begin() as connection:
+        for name, definition in additions.items():
+            if name not in existing:
+                connection.execute(text(f"ALTER TABLE violations ADD COLUMN {name} {definition}"))
 
 
 @asynccontextmanager
@@ -89,6 +110,29 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.middleware("http")
+async def audit_mutating_requests(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/") and request.method not in {"GET", "HEAD", "OPTIONS"} and request.url.path != "/api/auth/login":
+        principal = getattr(request.state, "principal", None) or {"id": None, "username": "anonymous"}
+        try:
+            with SessionLocal() as db:
+                db.add(AuditLog(
+                    employee_id=principal.get("id"),
+                    username=principal.get("username", "anonymous"),
+                    action=request.url.path.rsplit("/", 1)[-1] or request.method.lower(),
+                    method=request.method,
+                    path=request.url.path[:256],
+                    status_code=response.status_code,
+                    ip_address=request.client.host if request.client else None,
+                ))
+                db.commit()
+        except Exception:
+            # Auditing must never make a camera or acknowledgement request fail.
+            pass
+    return response
+
 wildcard_cors = "*" in settings.CORS_ORIGINS
 app.add_middleware(
     CORSMiddleware,
@@ -102,6 +146,7 @@ app.include_router(router)
 app.include_router(auth_router)
 app.include_router(employees_router)
 app.include_router(settings_router)
+app.include_router(diagnostics_router)
 
 
 @app.get("/media/{media_path:path}", dependencies=[Depends(verify_api_key)])

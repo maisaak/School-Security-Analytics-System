@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.api.auth import _attempts
 from app.core.accounts import check_password, hash_password
-from app.db.models import AppSetting
+from app.db.models import AppSetting, Violation
 from app.db.session import SessionLocal
 from app.main import app
 from app.models.detector import detector
@@ -98,6 +98,29 @@ def test_model_catalog_and_selection(client, monkeypatch):
     assert calls[0].name == "yolov8n.pt"
     with SessionLocal() as db:
         assert db.get(AppSetting, "base_model").value == "yolov8n.pt"
+
+
+def test_admin_audit_records_mutating_actions(client):
+    response = client.post("/api/cameras", json={"name": "Audit camera", "rtsp_url": "sim://hallway"})
+    assert response.status_code == 201
+    logs = client.get("/api/audit").json()
+    assert any(row["path"] == "/api/cameras" and row["method"] == "POST" and row["status_code"] == 201 for row in logs)
+
+
+def test_operator_can_review_incident_with_status_and_comment(client):
+    employee(client, role="operator", username="reviewer")
+    incident = client.post("/api/cameras", json={"name": "Review camera", "rtsp_url": "sim://hallway"})
+    assert incident.status_code == 201
+    camera_id = incident.json()["id"]
+    with SessionLocal() as db:
+        db.add(Violation(camera_id=camera_id, violation_type="dog", confidence=0.9, image_path="/media/test.jpg"))
+        db.commit()
+        row_id = db.query(Violation.id).filter(Violation.camera_id == camera_id).scalar()
+    browser = login("reviewer")
+    reviewed = browser.patch(f"/api/violations/{row_id}/review", json={"status": "false_alarm", "comment": "Проверено оператором"})
+    assert reviewed.status_code == 200, reviewed.text
+    assert reviewed.json()["review_status"] == "false_alarm"
+    assert reviewed.json()["review_comment"] == "Проверено оператором"
 
 
 def test_failed_selection_preserves_saved_model(client, monkeypatch):
