@@ -3,11 +3,11 @@ import { api, AuditEntry, Diagnostics, Employee, ModelCatalog, Preferences, User
 import { CustomSelect } from "../components/CustomSelect";
 import { ColorWheel } from "../components/ColorWheel";
 
-interface Props { user: User; preferences: Preferences; onPreferences: (value: Preferences) => void }
+interface Props { user: User; preferences: Preferences; onPreferences: (value: Preferences) => void; onPreview: (value: Preferences | null) => void }
 const input = "custom-input";
 const roleName = { admin: "Администратор", operator: "Охрана", viewer: "Директор" };
 
-export function SettingsPage({ user, preferences, onPreferences }: Props) {
+export function SettingsPage({ user, preferences, onPreferences, onPreview }: Props) {
   const [draft, setDraft] = useState(preferences);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
@@ -21,6 +21,9 @@ export function SettingsPage({ user, preferences, onPreferences }: Props) {
   const [newPassword, setNewPassword] = useState("");
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
+
+  useEffect(() => { onPreview(draft); }, [draft, onPreview]);
+  useEffect(() => () => onPreview(null), [onPreview]);
 
   useEffect(() => {
     api.modelCatalog().then(c => { setCatalog(c); setModel(c.models.find(m => m.filename === c.active_base)?.id ?? "yolov8n"); }).catch(e => setError(e.message));
@@ -50,7 +53,7 @@ export function SettingsPage({ user, preferences, onPreferences }: Props) {
       </label>
       <div className="settings-subsection"><h3>Внешний вид</h3><p className="text-xs text-slate-400">Настройки сохраняются только для текущей учётной записи.</p></div>
       <label className="custom-check-row"><input className="custom-checkbox" type="checkbox" checked={draft.liquid_glass} onChange={e => setDraft({ ...draft, liquid_glass: e.target.checked })} /><span>Liquid Glass — стеклянные панели</span></label>
-      <label className="block text-sm">Прозрачность панелей <strong>{draft.transparency}%</strong><input className="modern-range" type="range" min={0} max={70} disabled={!draft.liquid_glass} value={draft.transparency} style={{ "--range-progress": `${draft.transparency / 70 * 100}%` } as React.CSSProperties} onChange={e => setDraft({ ...draft, transparency: Number(e.target.value) })} /><span className="text-xs text-slate-400">0% — непрозрачные панели; 70% — максимальная прозрачность. Нажмите «Сохранить интерфейс», чтобы применить.</span></label>
+      <label className="block text-sm">Прозрачность панелей <strong>{draft.transparency}%</strong><input className="modern-range" type="range" min={0} max={70} disabled={!draft.liquid_glass} value={draft.transparency} style={{ "--range-progress": `${draft.transparency / 70 * 100}%` } as React.CSSProperties} onChange={e => setDraft({ ...draft, transparency: Number(e.target.value) })} /><span className="text-xs text-slate-400">0% — непрозрачные панели; 70% — максимальная прозрачность. Оформление меняется сразу; нажмите «Сохранить интерфейс», чтобы сохранить его.</span></label>
       <label className="block text-sm">Тема<CustomSelect value={draft.theme} onChange={value => setDraft({ ...draft, theme: value as Preferences["theme"] })} options={[{ value: "dark", label: "Тёмная", hint: "Глубокий фон для поста наблюдения" }, { value: "light", label: "Светлая", hint: "Для хорошо освещённых помещений" }, { value: "system", label: "Как в системе", hint: "Следовать настройкам Windows" }]} /></label>
       <div className="block text-sm"><span>Акцентный цвет</span><ColorWheel value={draft.accent} onChange={accent => setDraft({ ...draft, accent })} /></div>
       <label className="block text-sm">Скругление блоков<CustomSelect value={draft.rounding} onChange={value => setDraft({ ...draft, rounding: value as Preferences["rounding"] })} options={[{ value: "none", label: "Без скругления" }, { value: "small", label: "Небольшое" }, { value: "large", label: "Выраженное" }]} /></label>

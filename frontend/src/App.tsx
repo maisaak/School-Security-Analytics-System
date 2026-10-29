@@ -18,14 +18,16 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [preferences, setPreferences] = useState<Preferences>(defaultPreferences);
+  const [appearancePreview, setAppearancePreview] = useState<Preferences | null>(null);
+  const appearance = appearancePreview ?? preferences;
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [adminLogin, setAdminLogin] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [loginBusy, setLoginBusy] = useState(false);
   const accentRgb = (() => {
-    const legacy: Record<string, string> = { indigo: "99 102 241", blue: "59 130 246", emerald: "16 185 129", violet: "139 92 246", rose: "244 63 94" };
-    const hex = legacy[preferences.accent] ?? preferences.accent;
+    const legacy: Record<string, string> = { indigo: "#6366f1", blue: "#3b82f6", emerald: "#10b981", violet: "#8b5cf6", rose: "#f43f5e" };
+    const hex = legacy[appearance.accent] ?? appearance.accent;
     const match = /^#?([0-9a-f]{6})$/i.exec(hex);
     if (!match) return "99 102 241";
     const value = match[1];
@@ -80,7 +82,7 @@ export default function App() {
   );
 
   return (
-    <div className={`app-shell min-h-screen text-slate-100 flex flex-col theme-${preferences.theme} rounding-${preferences.rounding} ${preferences.liquid_glass ? "liquid-glass" : ""} ${preferences.compact ? "compact-ui" : ""} ${preferences.animations ? "" : "no-animations"}`} style={{ "--accent": accentRgb, "--glass-opacity": 1 - preferences.transparency / 100 } as React.CSSProperties}>
+    <div className={`app-shell min-h-screen text-slate-100 flex flex-col theme-${appearance.theme} rounding-${appearance.rounding} ${appearance.liquid_glass ? "liquid-glass" : ""} ${appearance.compact ? "compact-ui" : ""} ${appearance.animations ? "" : "no-animations"}`} style={{ "--accent": accentRgb, "--glass-opacity": 1 - appearance.transparency / 100 } as React.CSSProperties}>
       {!displayMode && <Navbar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
@@ -99,7 +101,7 @@ export default function App() {
         {activeTab === "analytics" && <div className="space-y-6"><div className="page-heading"><p className="eyebrow">Отчёты и динамика</p><h2>Подробная аналитика</h2><p>Распределение событий, временная динамика и качество работы детектора.</p></div><StatsOverview stats={globalStats} detailed /></div>}
         {activeTab === "lab" && user?.role !== "viewer" && <LabPage />}
         {activeTab === "training" && user?.role === "admin" && <TrainingPage />}
-        {activeTab === "settings" && user && <SettingsPage user={user} preferences={preferences} onPreferences={setPreferences} />}
+        {activeTab === "settings" && user && <SettingsPage user={user} preferences={preferences} onPreferences={setPreferences} onPreview={setAppearancePreview} />}
       </main>
     </div>
   );
