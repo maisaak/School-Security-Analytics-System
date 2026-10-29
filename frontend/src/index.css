@@ -37,6 +37,7 @@ body { margin: 0; background: #020617; font-family: Inter, ui-sans-serif, system
 .rounding-small [class*="rounded-xl"] { border-radius: .55rem !important; }
 .no-animations *, .no-animations *::before, .no-animations *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
 .custom-select { position: relative; width: 100%; margin-top: .5rem; }
+.employee-role-select { width: 12rem; margin-top: 0; }
 .custom-select-trigger { display: flex; align-items: center; justify-content: space-between; gap: .75rem; width: 100%; min-height: 2.75rem; padding: .65rem .8rem; border: 1px solid #334155; border-radius: .75rem; background: #020617; color: #f8fafc; text-align: left; transition: border-color .2s, box-shadow .2s, background .2s; }
 .custom-select-trigger:hover, .custom-select.is-open .custom-select-trigger { border-color: rgb(var(--accent)); box-shadow: 0 0 0 3px rgb(var(--accent) / .12); background: #0b1224; }
 .custom-select-trigger:disabled { cursor: not-allowed; opacity: .5; }
