@@ -6,6 +6,7 @@ import { LabPage } from "./pages/LabPage";
 import { TrainingPage } from "./pages/TrainingPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { StatsOverview } from "./components/StatsOverview";
+import { Eye, EyeOff, KeyRound, LockKeyhole, ShieldCheck, UserRound } from "lucide-react";
 
 export default function App() {
   const displayMode = window.location.pathname === "/display";
@@ -20,6 +21,8 @@ export default function App() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [adminLogin, setAdminLogin] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [loginBusy, setLoginBusy] = useState(false);
 
   async function loadSession() {
     const session = await api.session();
@@ -43,22 +46,27 @@ export default function App() {
 
   if (checking) return <div className="min-h-screen bg-slate-950 text-white p-8">Подключение…</div>;
   if (!authenticated) return (
-    <main className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
-      <form className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-2xl p-6 space-y-4" onSubmit={async (e) => {
-        e.preventDefault(); setError(null);
+    <main className="login-shell">
+      <div className="login-glow login-glow-one" /><div className="login-glow login-glow-two" />
+      <form className="login-card" onSubmit={async (e) => {
+        e.preventDefault(); setError(null); setLoginBusy(true);
         try { if (adminLogin) await api.login(key); else await api.loginEmployee(username, password); setKey(""); setPassword(""); await loadSession(); }
         catch (err) { setError(err instanceof Error ? err.message : "Ошибка входа"); }
+        finally { setLoginBusy(false); }
       }}>
-        <h1 className="text-xl font-semibold">Школьный видеомониторинг</h1>
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={adminLogin} onChange={e => { setAdminLogin(e.target.checked); setError(null); }} />Войти ключом администратора</label>
-        {adminLogin ? <label className="block text-sm">Ключ доступа API_KEY из серверного .env
-          <input type="password" autoComplete="current-password" value={key} onChange={(e) => setKey(e.target.value)} required className="block w-full mt-2 bg-slate-950 border border-slate-700 rounded-lg p-3" />
-        </label> : <>
-          <label className="block text-sm">Логин<input autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} required className="block w-full mt-2 bg-slate-950 border border-slate-700 rounded-lg p-3" /></label>
-          <label className="block text-sm">Пароль<input type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} required className="block w-full mt-2 bg-slate-950 border border-slate-700 rounded-lg p-3" /></label>
+        <div className="login-brand"><div className="login-brand-icon"><ShieldCheck /></div><div><p className="login-kicker">School Security</p><h1>Школьный видеомониторинг</h1></div></div>
+        <p className="login-subtitle">Безопасность школы под контролем</p>
+        <div className="login-mode-switch" role="tablist" aria-label="Способ входа">
+          <button type="button" className={!adminLogin ? "active" : ""} onClick={() => { setAdminLogin(false); setError(null); }}><UserRound /> Сотрудник</button>
+          <button type="button" className={adminLogin ? "active" : ""} onClick={() => { setAdminLogin(true); setError(null); }}><KeyRound /> API-ключ</button>
+        </div>
+        {adminLogin ? <label className="login-field"><span>Ключ администратора</span><div className="login-input-wrap"><KeyRound /><input type="password" autoComplete="current-password" placeholder="Введите ключ доступа" value={key} onChange={(e) => setKey(e.target.value)} required /></div></label> : <>
+          <label className="login-field"><span>Логин</span><div className="login-input-wrap"><UserRound /><input autoComplete="username" placeholder="Введите логин" value={username} onChange={e => setUsername(e.target.value)} required /></div></label>
+          <label className="login-field"><span>Пароль</span><div className="login-input-wrap"><LockKeyhole /><input type={showPassword ? "text" : "password"} autoComplete="current-password" placeholder="Введите пароль" value={password} onChange={e => setPassword(e.target.value)} required /><button type="button" className="login-password-toggle" aria-label={showPassword ? "Скрыть пароль" : "Показать пароль"} onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff /> : <Eye />}</button></div></label>
         </>}
-        {error && <p role="alert" className="text-red-300 text-sm">{error}</p>}
-        <button className="w-full rounded-lg bg-indigo-600 p-3" type="submit">Войти</button>
+        {error && <p role="alert" className="login-error">{error}</p>}
+        <button className="login-submit" type="submit" disabled={loginBusy}>{loginBusy ? <><span className="login-spinner" />Проверяем данные…</> : "Войти в систему"}</button>
+        <p className="login-footer">Доступ только для авторизованных сотрудников</p>
       </form>
     </main>
   );

@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { api, AuditEntry, Diagnostics, Employee, ModelCatalog, Preferences, User } from "../api/client";
 import { CustomSelect } from "../components/CustomSelect";
+import { ColorWheel } from "../components/ColorWheel";
 
 interface Props { user: User; preferences: Preferences; onPreferences: (value: Preferences) => void }
-const input = "w-full";
+const input = "custom-input";
 const roleName = { admin: "Администратор", operator: "Охрана", viewer: "Директор" };
 
 export function SettingsPage({ user, preferences, onPreferences }: Props) {
@@ -49,12 +50,12 @@ export function SettingsPage({ user, preferences, onPreferences }: Props) {
       </label>
       <div className="settings-subsection"><h3>Внешний вид</h3><p className="text-xs text-slate-400">Настройки сохраняются только для текущей учётной записи.</p></div>
       <label className="block text-sm">Тема<CustomSelect value={draft.theme} onChange={value => setDraft({ ...draft, theme: value as Preferences["theme"] })} options={[{ value: "dark", label: "Тёмная", hint: "Глубокий фон для поста наблюдения" }, { value: "light", label: "Светлая", hint: "Для хорошо освещённых помещений" }, { value: "system", label: "Как в системе", hint: "Следовать настройкам Windows" }]} /></label>
-      <label className="block text-sm">Акцентный цвет<CustomSelect value={draft.accent} onChange={value => setDraft({ ...draft, accent: value as Preferences["accent"] })} options={[{ value: "indigo", label: "Индиго" }, { value: "blue", label: "Синий" }, { value: "emerald", label: "Изумрудный" }, { value: "violet", label: "Фиолетовый" }, { value: "rose", label: "Розовый" }]} /></label>
+      <div className="block text-sm"><span>Акцентный цвет</span><ColorWheel value={draft.accent} onChange={accent => setDraft({ ...draft, accent })} /></div>
       <label className="block text-sm">Скругление блоков<CustomSelect value={draft.rounding} onChange={value => setDraft({ ...draft, rounding: value as Preferences["rounding"] })} options={[{ value: "none", label: "Без скругления" }, { value: "small", label: "Небольшое" }, { value: "large", label: "Выраженное" }]} /></label>
       {([ ["show_stats", "Сводная статистика"], ["show_archive", "Журнал инцидентов"], ["show_alerts", "Баннер новых событий"], ["compact", "Компактный режим"] ] as const).map(([key,label]) =>
-        <label key={key} className="flex items-center gap-3 text-sm"><input type="checkbox" checked={draft[key]} onChange={e => setDraft({ ...draft, [key]: e.target.checked })} />{label}</label>
+         <label key={key} className="custom-check-row"><input className="custom-checkbox" type="checkbox" checked={draft[key]} onChange={e => setDraft({ ...draft, [key]: e.target.checked })} /><span>{label}</span></label>
       )}
-      <label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={draft.animations} onChange={e => setDraft({ ...draft, animations: e.target.checked })} />Плавные анимации и переходы</label>
+      <label className="custom-check-row"><input className="custom-checkbox" type="checkbox" checked={draft.animations} onChange={e => setDraft({ ...draft, animations: e.target.checked })} /><span>Плавные анимации и переходы</span></label>
       {!draft.show_alerts && <p className="text-amber-300 text-xs">Баннер тревог будет скрыт; запись событий продолжится. Для поста охраны рекомендуем оставить его включённым.</p>}
       <button className="bg-indigo-600 rounded-lg px-4 py-2" onClick={() => run(async () => { const saved = await api.setPreferences(draft); onPreferences(saved); setMessage("Настройки интерфейса сохранены"); })}>Сохранить интерфейс</button>
     </fieldset>
@@ -64,7 +65,7 @@ export function SettingsPage({ user, preferences, onPreferences }: Props) {
       <p className="text-sm">Базовая: <strong>{catalog?.active_base ?? "…"}</strong> · Кастомная: {catalog?.custom_weights ?? "не активирована"}</p>
       <p className="text-xs text-slate-400">Выбор общий для всех камер. YOLOv8 и YOLO11: N — быстрее и легче, X — тяжелее. Специализированный детектор оружия и кастомные веса остаются отдельными. Обучение новых кандидатов использует выбранную базу.</p>
        <CustomSelect ariaLabel="Базовая модель YOLO" value={model} onChange={setModel} options={catalog?.models.map(m => ({ value: m.id, label: m.label, hint: m.installed ? "Установлена" : "Нужна загрузка" })) ?? []} disabled={!catalog} />
-      <label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={download} onChange={e => setDownload(e.target.checked)} />Разрешить загрузку официальных весов, если их нет на сервере</label>
+       <label className="custom-check-row"><input className="custom-checkbox" type="checkbox" checked={download} onChange={e => setDownload(e.target.checked)} /><span>Разрешить загрузку официальных весов, если их нет на сервере</span></label>
       <button className="bg-indigo-600 rounded-lg px-4 py-2" onClick={() => run(async () => { setCatalog(await api.selectModel(model, download)); setMessage("Модель проверена и применена"); })}>{busy ? "Выполняется…" : "Применить модель"}</button>
     </fieldset>
 
@@ -76,7 +77,7 @@ export function SettingsPage({ user, preferences, onPreferences }: Props) {
         <input required aria-label="Имя сотрудника" placeholder="Имя сотрудника" value={newUser.display_name} onChange={e => setNewUser({ ...newUser, display_name: e.target.value })} className={input} />
         <input required type="password" minLength={12} maxLength={256} autoComplete="new-password" aria-label="Пароль сотрудника" placeholder="Пароль: минимум 12 символов" value={newUser.password} onChange={e => setNewUser({ ...newUser, password: e.target.value })} className={input} />
          <CustomSelect ariaLabel="Роль нового сотрудника" value={newUser.role} onChange={value => setNewUser({ ...newUser, role: String(value) })} options={Object.entries(roleName).map(([value, label]) => ({ value, label }))} />
-        <button disabled={busy} className="bg-emerald-700 rounded-lg px-4 py-2">Создать сотрудника</button>
+         <button disabled={busy} className="accent-button rounded-lg px-4 py-2">Создать сотрудника</button>
       </form>
       <div className="space-y-3">{employees.map(employee => <div key={employee.id} className="border-t border-slate-700 pt-3 flex flex-wrap items-center gap-3">
         <span className="flex-1">{employee.display_name} · {employee.username} {!employee.is_active && "(отключён)"}</span>
