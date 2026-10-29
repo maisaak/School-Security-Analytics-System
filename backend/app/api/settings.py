@@ -4,7 +4,7 @@ import threading
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.core.config import PROJECT_ROOT
@@ -31,9 +31,16 @@ class Preferences(BaseModel):
     compact: bool = False
     default_tab: Literal["dashboard", "monitoring", "analytics", "lab", "training", "settings"] = "dashboard"
     theme: Literal["dark", "light", "system"] = "dark"
-    accent: Literal["indigo", "blue", "emerald", "violet", "rose"] = "indigo"
+    accent: str = Field(default="#6366f1", pattern=r"^#[0-9a-fA-F]{6}$")
     animations: bool = True
     rounding: Literal["none", "small", "large"] = "large"
+    liquid_glass: bool = True
+    transparency: int = Field(default=25, ge=0, le=70)
+
+    @field_validator("accent", mode="before")
+    @classmethod
+    def migrate_accent(cls, value):
+        return {"indigo": "#6366f1", "blue": "#3b82f6", "emerald": "#10b981", "violet": "#8b5cf6", "rose": "#f43f5e"}.get(value, value)
 
 
 def preferences_key(request: Request) -> str:

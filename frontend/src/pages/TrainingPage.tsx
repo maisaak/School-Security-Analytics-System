@@ -85,10 +85,10 @@ export const TrainingPage: React.FC = () => {
           </div>
 
           <form onSubmit={handleStartRetrain} className="space-y-4">
-            <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-4 space-y-2">
+            <div className="training-slider-card">
               <div className="flex justify-between text-xs">
                 <span className="text-slate-300 font-medium">Количество эпох обучения</span>
-                <span className="font-mono font-bold text-indigo-400">{epochs} эпох</span>
+                <span className="training-slider-value">{epochs} эпох</span>
               </div>
               <input
                 type="range"
@@ -97,9 +97,10 @@ export const TrainingPage: React.FC = () => {
                 step={1}
                 value={epochs}
                 onChange={(e) => setEpochs(Number(e.target.value))}
-                className="w-full accent-indigo-500"
+                className="modern-range"
+                style={{ "--range-progress": `${((epochs - 2) / 23) * 100}%` } as React.CSSProperties}
               />
-              <div className="flex justify-between text-[11px] text-slate-500">
+              <div className="training-slider-labels">
                 <span>Быстрый прогон (2 эп.)</span>
                 <span>Рекомендуемо (6–8 эп.)</span>
                 <span>Глубокое обучение (25 эп.)</span>

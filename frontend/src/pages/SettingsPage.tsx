@@ -40,7 +40,7 @@ export function SettingsPage({ user, preferences, onPreferences }: Props) {
     {error && <p role="alert" className="bg-red-950 text-red-200 p-3 rounded-xl">{error}</p>}
     {message && <p role="status" className="bg-emerald-950 text-emerald-200 p-3 rounded-xl">{message}</p>}
     <fieldset disabled={busy} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-      <legend className="text-lg font-semibold">Мой интерфейс</legend>
+      <div className="settings-panel-title">Мой интерфейс</div>
       <p className="text-xs text-slate-400">Сохраняется на сервере отдельно для каждой учётной записи. Скрытие блока не меняет права доступа.</p>
       <label className="block text-sm">Колонок видеостены
         <CustomSelect value={draft.columns} onChange={value => setDraft({ ...draft, columns: value as Preferences["columns"] })} options={[1,2,3,4].map(n => ({ value: n as Preferences["columns"], label: `${n} колон${n === 1 ? "ка" : "ки"}` }))} />
@@ -49,6 +49,8 @@ export function SettingsPage({ user, preferences, onPreferences }: Props) {
         <CustomSelect value={draft.default_tab} onChange={value => setDraft({ ...draft, default_tab: value as Preferences["default_tab"] })} options={[{ value: "dashboard", label: "Обзор" }, { value: "monitoring", label: "Мониторинг" }, { value: "analytics", label: "Аналитика" }, ...(user.role !== "viewer" ? [{ value: "lab", label: "Лаборатория" }] : []), ...(user.role === "admin" ? [{ value: "training", label: "Обучение" }] : []), { value: "settings", label: "Настройки" }]} />
       </label>
       <div className="settings-subsection"><h3>Внешний вид</h3><p className="text-xs text-slate-400">Настройки сохраняются только для текущей учётной записи.</p></div>
+      <label className="custom-check-row"><input className="custom-checkbox" type="checkbox" checked={draft.liquid_glass} onChange={e => setDraft({ ...draft, liquid_glass: e.target.checked })} /><span>Liquid Glass — стеклянные панели</span></label>
+      <label className="block text-sm">Прозрачность панелей <strong>{draft.transparency}%</strong><input className="modern-range" type="range" min={0} max={70} disabled={!draft.liquid_glass} value={draft.transparency} style={{ "--range-progress": `${draft.transparency / 70 * 100}%` } as React.CSSProperties} onChange={e => setDraft({ ...draft, transparency: Number(e.target.value) })} /><span className="text-xs text-slate-400">0% — непрозрачные панели; 70% — максимальная прозрачность. Нажмите «Сохранить интерфейс», чтобы применить.</span></label>
       <label className="block text-sm">Тема<CustomSelect value={draft.theme} onChange={value => setDraft({ ...draft, theme: value as Preferences["theme"] })} options={[{ value: "dark", label: "Тёмная", hint: "Глубокий фон для поста наблюдения" }, { value: "light", label: "Светлая", hint: "Для хорошо освещённых помещений" }, { value: "system", label: "Как в системе", hint: "Следовать настройкам Windows" }]} /></label>
       <div className="block text-sm"><span>Акцентный цвет</span><ColorWheel value={draft.accent} onChange={accent => setDraft({ ...draft, accent })} /></div>
       <label className="block text-sm">Скругление блоков<CustomSelect value={draft.rounding} onChange={value => setDraft({ ...draft, rounding: value as Preferences["rounding"] })} options={[{ value: "none", label: "Без скругления" }, { value: "small", label: "Небольшое" }, { value: "large", label: "Выраженное" }]} /></label>
@@ -61,7 +63,7 @@ export function SettingsPage({ user, preferences, onPreferences }: Props) {
     </fieldset>
 
     <fieldset disabled={busy || user.role !== "admin"} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-      <legend className="text-lg font-semibold">Версия YOLO</legend>
+      <div className="settings-panel-title">Версия YOLO</div>
       <p className="text-sm">Базовая: <strong>{catalog?.active_base ?? "…"}</strong> · Кастомная: {catalog?.custom_weights ?? "не активирована"}</p>
       <p className="text-xs text-slate-400">Выбор общий для всех камер. YOLOv8 и YOLO11: N — быстрее и легче, X — тяжелее. Специализированный детектор оружия и кастомные веса остаются отдельными. Обучение новых кандидатов использует выбранную базу.</p>
        <CustomSelect ariaLabel="Базовая модель YOLO" value={model} onChange={setModel} options={catalog?.models.map(m => ({ value: m.id, label: m.label, hint: m.installed ? "Установлена" : "Нужна загрузка" })) ?? []} disabled={!catalog} />

@@ -23,6 +23,14 @@ export default function App() {
   const [adminLogin, setAdminLogin] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [loginBusy, setLoginBusy] = useState(false);
+  const accentRgb = (() => {
+    const legacy: Record<string, string> = { indigo: "99 102 241", blue: "59 130 246", emerald: "16 185 129", violet: "139 92 246", rose: "244 63 94" };
+    const hex = legacy[preferences.accent] ?? preferences.accent;
+    const match = /^#?([0-9a-f]{6})$/i.exec(hex);
+    if (!match) return "99 102 241";
+    const value = match[1];
+    return `${parseInt(value.slice(0, 2), 16)} ${parseInt(value.slice(2, 4), 16)} ${parseInt(value.slice(4, 6), 16)}`;
+  })();
 
   async function loadSession() {
     const session = await api.session();
@@ -72,7 +80,7 @@ export default function App() {
   );
 
   return (
-    <div className={`app-shell min-h-screen text-slate-100 flex flex-col theme-${preferences.theme} accent-${preferences.accent} rounding-${preferences.rounding} ${preferences.compact ? "compact-ui" : ""} ${preferences.animations ? "" : "no-animations"}`}>
+    <div className={`app-shell min-h-screen text-slate-100 flex flex-col theme-${preferences.theme} rounding-${preferences.rounding} ${preferences.liquid_glass ? "liquid-glass" : ""} ${preferences.compact ? "compact-ui" : ""} ${preferences.animations ? "" : "no-animations"}`} style={{ "--accent": accentRgb, "--glass-opacity": 1 - preferences.transparency / 100 } as React.CSSProperties}>
       {!displayMode && <Navbar
         activeTab={activeTab}
         onSelectTab={setActiveTab}

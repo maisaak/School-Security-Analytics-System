@@ -87,6 +87,17 @@ def test_duplicate_login_and_weak_password_rejected(client):
     assert client.post("/api/employees", json={"username": "another", "display_name": "Name", "password": "short"}).status_code == 422
 
 
+def test_glass_and_arbitrary_color_preferences(client):
+    for color in ["#123456", "#ffffff", "#000000"]:
+        response = client.put("/api/preferences", json={"accent": color, "liquid_glass": True, "transparency": 60})
+        assert response.status_code == 200
+        assert client.get("/api/preferences").json()["accent"] == color
+        assert client.get("/api/preferences").json()["transparency"] == 60
+    assert client.put("/api/preferences", json={"transparency": 71}).status_code == 422
+    assert client.put("/api/preferences", json={"accent": "invalid"}).status_code == 422
+    assert client.put("/api/preferences", json={"accent": "emerald"}).json()["accent"] == "#10b981"
+
+
 def test_model_catalog_and_selection(client, monkeypatch):
     catalog = client.get("/api/models/catalog").json()
     assert len(catalog["models"]) == 10
