@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { api, AuditEntry, Diagnostics, Employee, ModelCatalog, Preferences, User } from "../api/client";
+import { CustomSelect } from "../components/CustomSelect";
 
 interface Props { user: User; preferences: Preferences; onPreferences: (value: Preferences) => void }
-const input = "bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm w-full";
-const roleName = { admin: "Администратор", operator: "Оператор", viewer: "Наблюдатель" };
+const input = "w-full";
+const roleName = { admin: "Администратор", operator: "Охрана", viewer: "Директор" };
 
 export function SettingsPage({ user, preferences, onPreferences }: Props) {
   const [draft, setDraft] = useState(preferences);
@@ -41,24 +42,15 @@ export function SettingsPage({ user, preferences, onPreferences }: Props) {
       <legend className="text-lg font-semibold">Мой интерфейс</legend>
       <p className="text-xs text-slate-400">Сохраняется на сервере отдельно для каждой учётной записи. Скрытие блока не меняет права доступа.</p>
       <label className="block text-sm">Колонок видеостены
-        <select value={draft.columns} onChange={e => setDraft({ ...draft, columns: Number(e.target.value) as Preferences["columns"] })} className={input}>
-          {[1,2,3,4].map(n => <option key={n} value={n}>{n}</option>)}
-        </select>
+        <CustomSelect value={draft.columns} onChange={value => setDraft({ ...draft, columns: value as Preferences["columns"] })} options={[1,2,3,4].map(n => ({ value: n as Preferences["columns"], label: `${n} колон${n === 1 ? "ка" : "ки"}` }))} />
       </label>
       <label className="block text-sm">Стартовая страница
-        <select value={draft.default_tab} onChange={e => setDraft({ ...draft, default_tab: e.target.value as Preferences["default_tab"] })} className={input}>
-          <option value="dashboard">Обзор</option>
-          <option value="monitoring">Мониторинг</option>
-          <option value="analytics">Аналитика</option>
-          {user.role !== "viewer" && <option value="lab">Лаборатория</option>}
-          {user.role === "admin" && <option value="training">Обучение</option>}
-          <option value="settings">Настройки</option>
-        </select>
+        <CustomSelect value={draft.default_tab} onChange={value => setDraft({ ...draft, default_tab: value as Preferences["default_tab"] })} options={[{ value: "dashboard", label: "Обзор" }, { value: "monitoring", label: "Мониторинг" }, { value: "analytics", label: "Аналитика" }, ...(user.role !== "viewer" ? [{ value: "lab", label: "Лаборатория" }] : []), ...(user.role === "admin" ? [{ value: "training", label: "Обучение" }] : []), { value: "settings", label: "Настройки" }]} />
       </label>
       <div className="settings-subsection"><h3>Внешний вид</h3><p className="text-xs text-slate-400">Настройки сохраняются только для текущей учётной записи.</p></div>
-      <label className="block text-sm">Тема<select value={draft.theme} onChange={e => setDraft({ ...draft, theme: e.target.value as Preferences["theme"] })} className={input}><option value="dark">Тёмная</option><option value="light">Светлая</option><option value="system">Как в системе</option></select></label>
-      <label className="block text-sm">Акцентный цвет<select value={draft.accent} onChange={e => setDraft({ ...draft, accent: e.target.value as Preferences["accent"] })} className={input}><option value="indigo">Индиго</option><option value="blue">Синий</option><option value="emerald">Изумрудный</option><option value="violet">Фиолетовый</option><option value="rose">Розовый</option></select></label>
-      <label className="block text-sm">Скругление блоков<select value={draft.rounding} onChange={e => setDraft({ ...draft, rounding: e.target.value as Preferences["rounding"] })} className={input}><option value="none">Без скругления</option><option value="small">Небольшое</option><option value="large">Выраженное</option></select></label>
+      <label className="block text-sm">Тема<CustomSelect value={draft.theme} onChange={value => setDraft({ ...draft, theme: value as Preferences["theme"] })} options={[{ value: "dark", label: "Тёмная", hint: "Глубокий фон для поста наблюдения" }, { value: "light", label: "Светлая", hint: "Для хорошо освещённых помещений" }, { value: "system", label: "Как в системе", hint: "Следовать настройкам Windows" }]} /></label>
+      <label className="block text-sm">Акцентный цвет<CustomSelect value={draft.accent} onChange={value => setDraft({ ...draft, accent: value as Preferences["accent"] })} options={[{ value: "indigo", label: "Индиго" }, { value: "blue", label: "Синий" }, { value: "emerald", label: "Изумрудный" }, { value: "violet", label: "Фиолетовый" }, { value: "rose", label: "Розовый" }]} /></label>
+      <label className="block text-sm">Скругление блоков<CustomSelect value={draft.rounding} onChange={value => setDraft({ ...draft, rounding: value as Preferences["rounding"] })} options={[{ value: "none", label: "Без скругления" }, { value: "small", label: "Небольшое" }, { value: "large", label: "Выраженное" }]} /></label>
       {([ ["show_stats", "Сводная статистика"], ["show_archive", "Журнал инцидентов"], ["show_alerts", "Баннер новых событий"], ["compact", "Компактный режим"] ] as const).map(([key,label]) =>
         <label key={key} className="flex items-center gap-3 text-sm"><input type="checkbox" checked={draft[key]} onChange={e => setDraft({ ...draft, [key]: e.target.checked })} />{label}</label>
       )}
@@ -71,16 +63,14 @@ export function SettingsPage({ user, preferences, onPreferences }: Props) {
       <legend className="text-lg font-semibold">Версия YOLO</legend>
       <p className="text-sm">Базовая: <strong>{catalog?.active_base ?? "…"}</strong> · Кастомная: {catalog?.custom_weights ?? "не активирована"}</p>
       <p className="text-xs text-slate-400">Выбор общий для всех камер. YOLOv8 и YOLO11: N — быстрее и легче, X — тяжелее. Специализированный детектор оружия и кастомные веса остаются отдельными. Обучение новых кандидатов использует выбранную базу.</p>
-      <select aria-label="Базовая модель YOLO" className={input} value={model} onChange={e => setModel(e.target.value)}>
-        {catalog?.models.map(m => <option key={m.id} value={m.id}>{m.label} · {m.installed ? "установлена" : "нужна загрузка"}</option>)}
-      </select>
+       <CustomSelect ariaLabel="Базовая модель YOLO" value={model} onChange={setModel} options={catalog?.models.map(m => ({ value: m.id, label: m.label, hint: m.installed ? "Установлена" : "Нужна загрузка" })) ?? []} disabled={!catalog} />
       <label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={download} onChange={e => setDownload(e.target.checked)} />Разрешить загрузку официальных весов, если их нет на сервере</label>
       <button className="bg-indigo-600 rounded-lg px-4 py-2" onClick={() => run(async () => { setCatalog(await api.selectModel(model, download)); setMessage("Модель проверена и применена"); })}>{busy ? "Выполняется…" : "Применить модель"}</button>
     </fieldset>
 
     {user.role === "admin" && <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
       <h3 className="text-lg font-semibold">Доступ сотрудников</h3>
-      <p className="text-xs text-slate-400">Наблюдатель: просмотр. Оператор: просмотр, проверка файлов и подтверждение инцидентов. Администратор: камеры, модели, обучение и сотрудники. Отключение, смена роли или пароля отзывает все сессии сотрудника.</p>
+       <p className="text-xs text-slate-400">Директор: просмотр камер, архива и аналитики. Охрана: просмотр, проверка файлов и обработка инцидентов. Администратор: камеры, модели, обучение и сотрудники. Отключение, смена роли или пароля отзывает все сессии сотрудника.</p>
       <form className="grid md:grid-cols-2 gap-3" onSubmit={e => { e.preventDefault(); run(async () => { await api.createEmployee(newUser); setEmployees(await api.getEmployees()); setNewUser({ username: "", display_name: "", password: "", role: "viewer" }); setMessage("Сотрудник создан. Передайте логин и пароль безопасным способом."); }); }}>
         <input required aria-label="Логин сотрудника" placeholder="Логин: латиница, 3–64 символа" pattern="[a-z0-9][a-z0-9_.\-]{2,63}" value={newUser.username} onChange={e => setNewUser({ ...newUser, username: e.target.value })} className={input} />
         <input required aria-label="Имя сотрудника" placeholder="Имя сотрудника" value={newUser.display_name} onChange={e => setNewUser({ ...newUser, display_name: e.target.value })} className={input} />
