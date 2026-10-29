@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import shutil
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import PROJECT_ROOT, settings
 from app.core.security import require_admin
@@ -10,10 +12,22 @@ from app.db.session import get_db
 from app.models.detector import detector
 from app.services.stream_manager import stream_manager
 
-router = APIRouter(prefix="/api/system", dependencies=[Depends(require_admin)], tags=["system"])
+router = APIRouter(prefix="/api/system", tags=["system"])
 
 
-@router.get("/diagnostics")
+@router.get("/status")
+def system_status(response: Response, db=Depends(get_db)):
+    """Minimal public readiness check; no paths, camera names or secrets."""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        db.execute(text("SELECT 1"))
+    except SQLAlchemyError:
+        response.status_code = 503
+        return {"api": "ok", "database": "unavailable"}
+    return {"api": "ok", "database": "ok"}
+
+
+@router.get("/diagnostics", dependencies=[Depends(require_admin)])
 def diagnostics(db=Depends(get_db)):
     cameras = []
     for camera in db.query(Camera).filter(Camera.rtsp_url != "lab://uploads").order_by(Camera.id).all():

@@ -12,7 +12,7 @@
 ![YOLO](https://img.shields.io/badge/YOLO-v8%20%7C%2011-7C3AED)
 ![Platforms](https://img.shields.io/badge/Windows%20%7C%20Linux-локальный%20запуск-475569)
 
-[О проекте](#о-проекте) · [Windows](#установка-на-windows) · [Linux](#установка-на-linux) · [Docker](#запуск-через-docker) · [Первый вход](#первый-вход) · [Документация API](#api-и-интеграции)
+[О проекте](#о-проекте) · [Windows](#установка-на-windows) · [Linux](#установка-на-linux) · [Сервер Ubuntu/Debian](#сервер-ubuntudebian) · [Docker](#запуск-через-docker) · [Первый вход](#первый-вход) · [Документация API](#api-и-интеграции)
 
 </div>
 
@@ -214,6 +214,155 @@ npm run dev
 
 > [!NOTE]
 > Локальные тесты и сборка выполнялись на Windows. Linux-инструкции соответствуют структуре проекта, но отдельные полевые испытания Linux/RTSP и Docker в текущем окружении не проводились.
+
+## Сервер Ubuntu/Debian
+
+Серверная схема **без Docker**: Nginx отдаёт production-сборку React и проксирует запросы к API на `127.0.0.1:8000`. Один backend-процесс управляется systemd: запускается после перезагрузки и перезапускается при аварии. Node.js нужен только для сборки — Vite на сервере не запускается. База по умолчанию — SQLite; обучение выполняется локально. Для PostgreSQL и отдельного Celery worker используйте [Docker Compose](#запуск-через-docker).
+
+Инструкция рассчитана на **Ubuntu 24.04 LTS / Debian 13** с systemd, доступом `sudo` и доменом. Для других версий Debian/Ubuntu сначала проверьте доступность Python 3.13. Рекомендуемый начальный ресурс: 4 CPU, 8 ГБ RAM, SSD от 40 ГБ; это ориентир, а не гарантия производительности — число потоков и обучение требуют нагрузочных испытаний. Для реальных камер предпочтительна закрытая сеть/VPN.
+
+> Linux/systemd/Nginx в текущем Windows-окружении не проверялись на живом сервере. Перед эксплуатацией проведите пробное развёртывание. Скрипт не настраивает GPU/CUDA, DNS и TLS автоматически и не заменяет резервное копирование.
+
+### 1. Подготовьте ОС
+
+```bash
+sudo apt update
+sudo apt install -y git curl ca-certificates build-essential nginx ffmpeg libgl1 libglib2.0-0 libgomp1
+```
+
+Нужны **Python 3.13** с `venv` и **Node.js 22 LTS** с npm. Debian 13:
+
+```bash
+sudo apt install -y python3.13 python3.13-venv
+```
+
+На Ubuntu 24.04 штатный Python другой версии. Не меняйте `/usr/bin/python3`! Можно отдельно собрать Python из официального исходного архива:
+
+```bash
+sudo apt install -y libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev libffi-dev liblzma-dev uuid-dev pkg-config
+# Пример версии. Перед установкой выберите актуальное исправление ветки 3.13
+# на https://www.python.org/downloads/ и проверьте подлинность архива.
+curl -fLO https://www.python.org/ftp/python/3.13.9/Python-3.13.9.tgz
+tar -xzf Python-3.13.9.tgz
+cd Python-3.13.9
+./configure --with-ensurepip=install
+make -j2
+sudo make altinstall
+cd ..
+```
+
+Установите Node.js 22 через официальный пакетный репозиторий/бинарный дистрибутив, следуя [инструкции Node.js](https://nodejs.org/en/download). Важно: `node` и `npm` должны быть доступны системно, а не только в интерактивном `nvm`-окружении пользователя.
+
+```bash
+python3.13 --version
+node --version
+npm --version
+```
+
+### 2. Создайте пользователя и скачайте проект
+
+Пути и пользователь ниже совпадают с готовыми файлами в `deploy/`. Не запускайте приложение от root.
+
+```bash
+sudo useradd --system --user-group --home-dir /opt/school-security --shell /usr/sbin/nologin school-security
+sudo install -d -o school-security -g school-security -m 750 /opt/school-security
+sudo -u school-security git clone https://github.com/maisaak/School-Security-Analytics-System.git /opt/school-security
+cd /opt/school-security
+sudo -u school-security python3.13 scripts/setup_env.py
+sudo chmod 600 .env
+sudoedit .env
+```
+
+Сохраните сгенерированный `API_KEY` отдельно. Проверьте `.env` (замените домен своим):
+
+```dotenv
+DEV_MODE=false
+SEED_DEMO_CAMERAS=false
+COOKIE_SECURE=false
+CORS_ORIGINS=["https://school.example.org"]
+ALLOW_LOCAL_WEBCAM=false
+ALLOW_HTTP_CAMERAS=false
+CAMERA_ALLOWED_HOSTS=["192.168.10.21","192.168.10.22"]
+ENABLE_LOCAL_TRAINING=true
+```
+
+`COOKIE_SECURE=false` используется **только для первичной проверки HTTP**; после TLS обязательно включите `true`. Не выставляйте `DEV_MODE=true`, wildcard CORS или пустой API-ключ. Не переносите Windows `.venv` на сервер. Веса моделей можно перенести отдельно в `ml/models/`; не активируйте непроверенные модели. PostgreSQL требует собственной схемы бэкапов: локальный `backup_data.py` сохраняет только стандартный файл SQLite.
+
+### 3. Установите сервис и Nginx
+
+```bash
+cd /opt/school-security
+sudo bash scripts/deploy_server.sh school.example.org
+sudo systemctl status school-security --no-pager
+curl -f http://127.0.0.1:8000/api/system/status
+curl -f -H 'Host: school.example.org' http://127.0.0.1/api/system/status
+```
+
+Скрипт устанавливает Python-зависимости, собирает интерфейс, публикует его в `/var/www/school-security`, устанавливает `deploy/school-security.service` и Nginx-конфигурацию. `.env`, база, медиа и модели не перезаписываются. Скрипт проверяет готовность API перед перезагрузкой Nginx. После нескольких сбоев подряд systemd останавливает повторные запуски: устраните причину и выполните `sudo systemctl reset-failed school-security`, затем `sudo systemctl restart school-security`.
+
+Убедитесь, что DNS домена указывает на сервер. Скрипт не удаляет другие сайты Nginx. Если обращаетесь по IP, можно увидеть стандартный сайт — используйте домен или корректный заголовок Host. Медиа остаются защищены авторизацией backend; не публикуйте `media/`, `.env` или каталог проекта напрямую через Nginx.
+
+### 4. Включите HTTPS и ограничьте доступ
+
+Для публичного домена с корректным DNS и доступными 80/443:
+
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d school.example.org --redirect
+sudo certbot renew --dry-run
+sudoedit /opt/school-security/.env
+# Установите COOKIE_SECURE=true, затем:
+sudo systemctl restart school-security
+```
+
+Если используется UFW, сначала сохраните SSH-доступ (для нестандартного SSH-порта откройте именно его). Не включайте firewall вслепую на удалённом сервере:
+
+```bash
+sudo apt install -y ufw
+sudo ufw allow OpenSSH
+sudo ufw allow 'Nginx Full'
+sudo ufw enable
+sudo ufw status
+```
+
+Порты 8000, 3000, БД и Redis наружу **не открывайте**. Для закрытой школьной сети используйте VPN и внутренний доверенный сертификат вместо публичного Certbot. Сертификат без доверия на клиентских устройствах не обеспечивает нормальную эксплуатацию. После HTTPS войдите через вкладку **API-ключ** с ключом из серверного `.env`, создайте сотрудников и проверяйте их права; стандартная учётная запись `admin` автоматически не создаётся.
+
+### 5. Резервное копирование
+
+```bash
+sudo -u school-security /opt/school-security/.venv/bin/python /opt/school-security/scripts/backup_data.py
+sudo install -m 644 deploy/school-security-backup.service deploy/school-security-backup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now school-security-backup.timer
+sudo systemctl list-timers school-security-backup.timer
+```
+
+Копии сохраняются в `/opt/school-security/backups/` ежедневно около 03:30; пропущенное задание выполняется после включения сервера. Успешная копия содержит `BACKUP_COMPLETE.txt`, неуспешная — `BACKUP_FAILED.txt`. SQLite копируется через Backup API, включая подтверждённые WAL-транзакции; целостность базы проверяется. Файлы медиа копируются последовательно: для полностью согласованного снимка остановите запись/обучение. `.env` не включён: храните его отдельно защищённо. Копии содержат персональные данные — ограничьте доступ, шифруйте перенос на другой носитель. Автоматического удаления старых копий нет: контролируйте свободное место и периодически проверяйте восстановление на отдельном стенде.
+
+### 6. Обновление и диагностика
+
+Перед обновлением сделайте копию и запишите текущий коммит (`git rev-parse HEAD`). Для согласованной копии остановите backend:
+
+```bash
+cd /opt/school-security
+sudo systemctl stop school-security
+sudo -u school-security .venv/bin/python scripts/backup_data.py
+sudo -u school-security git pull --ff-only
+sudo bash scripts/deploy_server.sh school.example.org
+```
+
+**Важно:** повторный запуск скрипта заново записывает HTTP-конфигурацию сайта Nginx. После него повторно выполните `sudo certbot --nginx -d school.example.org --redirect`, чтобы восстановить TLS, и проверьте HTTPS. Для площадок с собственными настройками Nginx обновляйте конфигурацию вручную, не перезаписывая её скриптом. При ошибке обновления не восстанавливайте старую БД поверх новой без проверки совместимости; сначала испытайте откат на копии.
+
+```bash
+sudo journalctl -u school-security -n 100 --no-pager
+sudo journalctl -u school-security -f
+sudo journalctl -u school-security-backup.service -n 50 --no-pager
+sudo nginx -t
+sudo tail -n 100 /var/log/nginx/error.log
+sudo ss -ltnp
+```
+
+`502` от Nginx обычно означает, что API не запущен; `503` у `/api/system/status` — ошибка БД. Сначала изучите `journalctl`, а не переустанавливайте проект и не удаляйте базу. В сервисе оставлен **один worker**: несколько API-процессов дублируют управление камерами. GPU-драйверы/CUDA и ресурсы обучения настраиваются отдельно.
 
 ## Запуск через Docker
 

@@ -1,0 +1,12 @@
+[Unit]
+Description=School Security SQLite and media backup
+
+[Service]
+Type=oneshot
+User=school-security
+Group=school-security
+WorkingDirectory=/opt/school-security
+UMask=0077
+ExecStart=/opt/school-security/.venv/bin/python scripts/backup_data.py
+NoNewPrivileges=true
+PrivateTmp=true

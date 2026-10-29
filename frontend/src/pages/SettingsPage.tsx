@@ -1,15 +1,18 @@
 import React, { useEffect, useState } from "react";
-import { api, AuditEntry, Diagnostics, Employee, ModelCatalog, Preferences, User } from "../api/client";
+import { api, AuditEntry, Diagnostics, Employee, ModelCatalog, Preferences, Role, User } from "../api/client";
 import { CustomSelect } from "../components/CustomSelect";
 import { ColorWheel } from "../components/ColorWheel";
 
 interface Props { user: User; preferences: Preferences; onPreferences: (value: Preferences) => void; onPreview: (value: Preferences | null) => void }
 const input = "custom-input";
-const roleName = { admin: "Администратор", operator: "Охрана", viewer: "Директор" };
+const roleName: Record<string, string> = { admin: "Администратор", operator: "Охрана", viewer: "Директор" };
+const permissionOptions = [{ key: "review_incidents", label: "Обработка инцидентов" }, { key: "analyze_files", label: "Проверка фото и видео" }];
 
 export function SettingsPage({ user, preferences, onPreferences, onPreview }: Props) {
   const [draft, setDraft] = useState(preferences);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [newRole, setNewRole] = useState({ name: "", description: "", permissions: [] as string[] });
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [model, setModel] = useState("");
   const [download, setDownload] = useState(false);
@@ -28,6 +31,7 @@ export function SettingsPage({ user, preferences, onPreferences, onPreview }: Pr
   useEffect(() => {
     api.modelCatalog().then(c => { setCatalog(c); setModel(c.models.find(m => m.filename === c.active_base)?.id ?? "yolov8n"); }).catch(e => setError(e.message));
     if (user.role === "admin") api.getEmployees().then(setEmployees).catch(e => setError(e.message));
+    if (user.role === "admin") api.getRoles().then(setRoles).catch(e => setError(e.message));
     if (user.role === "admin") api.getAudit(100).then(setAudit).catch(e => setError(e.message));
     if (user.role === "admin") api.getDiagnostics().then(setDiagnostics).catch(e => setError(e.message));
   }, [user.role]);
@@ -77,16 +81,16 @@ export function SettingsPage({ user, preferences, onPreferences, onPreview }: Pr
     {user.role === "admin" && <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
       <h3 className="text-lg font-semibold">Доступ сотрудников</h3>
        <p className="text-xs text-slate-400">Директор: просмотр камер, архива и аналитики. Охрана: просмотр, проверка файлов и обработка инцидентов. Администратор: камеры, модели, обучение и сотрудники. Отключение, смена роли или пароля отзывает все сессии сотрудника.</p>
-      <form className="grid md:grid-cols-2 gap-3" onSubmit={e => { e.preventDefault(); run(async () => { await api.createEmployee(newUser); setEmployees(await api.getEmployees()); setNewUser({ username: "", display_name: "", password: "", role: "viewer" }); setMessage("Сотрудник создан. Передайте логин и пароль безопасным способом."); }); }}>
+       <form className="grid md:grid-cols-2 gap-3" onSubmit={e => { e.preventDefault(); run(async () => { await api.createEmployee(newUser); setEmployees(await api.getEmployees()); setNewUser({ username: "", display_name: "", password: "", role: roles[0]?.key ?? "viewer" }); setMessage("Сотрудник создан. Передайте логин и пароль безопасным способом."); }); }}>
         <input required aria-label="Логин сотрудника" placeholder="Логин: латиница, 3–64 символа" pattern="[a-z0-9][a-z0-9_.\-]{2,63}" value={newUser.username} onChange={e => setNewUser({ ...newUser, username: e.target.value })} className={input} />
         <input required aria-label="Имя сотрудника" placeholder="Имя сотрудника" value={newUser.display_name} onChange={e => setNewUser({ ...newUser, display_name: e.target.value })} className={input} />
         <input required type="password" minLength={12} maxLength={256} autoComplete="new-password" aria-label="Пароль сотрудника" placeholder="Пароль: минимум 12 символов" value={newUser.password} onChange={e => setNewUser({ ...newUser, password: e.target.value })} className={input} />
-         <CustomSelect ariaLabel="Роль нового сотрудника" value={newUser.role} onChange={value => setNewUser({ ...newUser, role: String(value) })} options={Object.entries(roleName).map(([value, label]) => ({ value, label }))} />
+         <CustomSelect ariaLabel="Роль нового сотрудника" value={newUser.role} onChange={value => setNewUser({ ...newUser, role: String(value) })} options={roles.map(role => ({ value: role.key, label: role.name, hint: role.description }))} />
          <button disabled={busy} className="accent-button rounded-lg px-4 py-2">Создать сотрудника</button>
       </form>
       <div className="space-y-3">{employees.map(employee => <div key={employee.id} className="border-t border-slate-700 pt-3 flex flex-wrap items-center gap-3">
         <span className="flex-1">{employee.display_name} · {employee.username} {!employee.is_active && "(отключён)"}</span>
-         <CustomSelect className="employee-role-select" disabled={busy || employee.id === user.id} ariaLabel={`Роль ${employee.username}`} value={employee.role} onChange={role => { run(async () => { await api.updateEmployee(employee.id, { role: String(role) }); setEmployees(await api.getEmployees()); }); }} options={Object.entries(roleName).map(([value, label]) => ({ value, label }))} />
+          <CustomSelect className="employee-role-select" disabled={busy || employee.id === user.id} ariaLabel={`Роль ${employee.username}`} value={employee.role} onChange={role => { run(async () => { await api.updateEmployee(employee.id, { role: String(role) }); setEmployees(await api.getEmployees()); }); }} options={roles.map(role => ({ value: role.key, label: role.name, hint: role.description }))} />
         <button disabled={busy || employee.id === user.id} onClick={() => run(async () => { await api.updateEmployee(employee.id, { is_active: !employee.is_active }); setEmployees(await api.getEmployees()); })} className="border border-slate-600 rounded-lg p-2">{employee.is_active ? "Отключить" : "Включить"}</button>
         <button onClick={() => { setResetId(employee.id); setNewPassword(""); }} className="border border-slate-600 rounded-lg p-2">Новый пароль</button>
       </div>)}</div>
@@ -94,6 +98,16 @@ export function SettingsPage({ user, preferences, onPreferences, onPreview }: Pr
         <input required type="password" minLength={12} maxLength={256} autoComplete="new-password" aria-label="Новый пароль" placeholder="Новый пароль (12+ символов)" value={newPassword} onChange={e => setNewPassword(e.target.value)} className={input} />
         <button disabled={busy} className="bg-indigo-600 rounded-lg p-2">Сохранить</button><button type="button" onClick={() => setResetId(null)}>Отмена</button>
       </form>}
+      <div className="role-builder">
+        <div><h4>Конструктор ролей</h4><p>Создайте название должности, опишите её функцию и укажите разрешения.</p></div>
+        <form className="role-builder-form" onSubmit={e => { e.preventDefault(); run(async () => { await api.createRole(newRole); setRoles(await api.getRoles()); setNewRole({ name: "", description: "", permissions: [] }); setMessage("Роль создана"); }); }}>
+          <input required maxLength={80} className={input} placeholder="Название роли, например Архивариус" value={newRole.name} onChange={e => setNewRole({ ...newRole, name: e.target.value })} />
+          <input maxLength={240} className={input} placeholder="Функция роли" value={newRole.description} onChange={e => setNewRole({ ...newRole, description: e.target.value })} />
+          <div className="role-permissions">{permissionOptions.map(permission => <label className="custom-check-row" key={permission.key}><input className="custom-checkbox" type="checkbox" checked={newRole.permissions.includes(permission.key)} onChange={e => setNewRole({ ...newRole, permissions: e.target.checked ? [...newRole.permissions, permission.key] : newRole.permissions.filter(value => value !== permission.key) })} /><span>{permission.label}</span></label>)}</div>
+          <button disabled={busy} className="accent-button rounded-lg px-4 py-2">Создать роль</button>
+        </form>
+        <div className="role-list">{roles.filter(role => !role.is_system).map(role => <div className="role-card" key={role.key}><div><strong>{role.name}</strong><span>{role.description || "Без описания"}</span></div><button disabled={busy} onClick={() => run(async () => { await api.deleteRole(role.key); setRoles(await api.getRoles()); setMessage("Роль удалена"); })}>Удалить</button></div>)}</div>
+      </div>
     </section>}
 
     {user.role === "admin" && <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">

@@ -1,6 +1,7 @@
 import React from "react";
 import { CheckCircle2, Clock, Play, Trash2 } from "lucide-react";
 import { Camera, Violation } from "../api/client";
+import { CustomSelect } from "./CustomSelect";
 
 export const VIOLATION_META: Record<
   Violation["violation_type"],
@@ -67,48 +68,28 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          <select
-            value={filterType}
-            onChange={(e) => onChangeType(e.target.value)}
-            className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
-          >
-            <option value="">Все типы угроз</option>
-            <option value="weapon">Оружие</option>
-            <option value="suspicious_bag">Бесхозные сумки</option>
-            <option value="dog">Собаки на территории</option>
-          </select>
-
-          <select
-            value={filterCameraId ?? ""}
-            onChange={(e) => onChangeCamera(e.target.value ? Number(e.target.value) : undefined)}
-            className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
-          >
-            <option value="">Все камеры</option>
-            {cameras.map((cam) => (
-              <option key={cam.id} value={cam.id}>
-                {cam.name}
-              </option>
-            ))}
-          </select>
-
-          <label className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 cursor-pointer select-none">
+        <div className="journal-filters">
+          <CustomSelect ariaLabel="Тип угрозы" value={filterType} onChange={onChangeType} options={[
+            { value: "", label: "Все типы угроз" }, { value: "weapon", label: "Оружие" },
+            { value: "suspicious_bag", label: "Бесхозные сумки" }, { value: "dog", label: "Собаки на территории" },
+          ]} />
+          <CustomSelect ariaLabel="Камера" value={String(filterCameraId ?? "")} onChange={value => onChangeCamera(value ? Number(value) : undefined)} options={[
+            { value: "", label: "Все камеры" }, ...cameras.map(cam => ({ value: String(cam.id), label: cam.name })),
+          ]} />
+          <label className={`journal-filter-check ${onlyUnack ? "is-active" : ""}`}>
             <input
               type="checkbox"
               checked={onlyUnack}
               onChange={(e) => onChangeUnack(e.target.checked)}
-              className="rounded accent-indigo-500"
+              className="custom-checkbox"
             />
             Неподтверждённые
           </label>
-          <select value={reviewStatus} onChange={(e) => onChangeReviewStatus(e.target.value)} className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
-            <option value="">Все статусы</option>
-            <option value="new">Новые</option>
-            <option value="in_review">На проверке</option>
-            <option value="confirmed">Подтверждённые</option>
-            <option value="false_alarm">Ложные тревоги</option>
-            <option value="closed">Закрытые</option>
-          </select>
+          <CustomSelect ariaLabel="Статус инцидента" value={reviewStatus} onChange={onChangeReviewStatus} options={[
+            { value: "", label: "Все статусы" }, { value: "new", label: "Новые" },
+            { value: "in_review", label: "На проверке" }, { value: "confirmed", label: "Подтверждённые" },
+            { value: "false_alarm", label: "Ложные тревоги" }, { value: "closed", label: "Закрытые" },
+          ]} />
         </div>
       </div>
 

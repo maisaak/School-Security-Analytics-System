@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from app.core.config import settings
 from app.db.models import AccessSession, Employee
 from app.db.session import SessionLocal
+from app.core.roles import get_role
 
 
 def hash_password(password: str) -> str:
@@ -56,11 +57,14 @@ def principal_for_session(token: str) -> dict | None:
         user = db.get(Employee, row.employee_id)
         if not user or not user.is_active:
             return None
-        return {"id": user.id, "username": user.username, "display_name": user.display_name, "role": user.role}
+        role = get_role(db, user.role)
+        if not role:
+            return None
+        return {"id": user.id, "username": user.username, "display_name": user.display_name, "role": user.role, "role_name": role["name"], "permissions": role["permissions"]}
 
 
 def root_principal() -> dict:
-    return {"id": None, "username": "system", "display_name": "Администратор системы", "role": "admin"}
+    return {"id": None, "username": "system", "display_name": "Администратор системы", "role": "admin", "role_name": "Администратор", "permissions": ["review_incidents", "analyze_files"]}
 
 
 def revoke_sessions(db, employee_id: int) -> None:

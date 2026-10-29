@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from app.api.routes import router
 from app.api.auth import router as auth_router
 from app.api.employees import router as employees_router
+from app.api.roles import router as roles_router
 from app.api.settings import router as settings_router, MODEL_CATALOG
 from app.api.diagnostics import router as diagnostics_router
 from app.core.config import settings
@@ -145,6 +146,7 @@ app.add_middleware(
 app.include_router(router)
 app.include_router(auth_router)
 app.include_router(employees_router)
+app.include_router(roles_router)
 app.include_router(settings_router)
 app.include_router(diagnostics_router)
 

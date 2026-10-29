@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily School Security backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=school-security-backup.service
+
+[Install]
+WantedBy=timers.target

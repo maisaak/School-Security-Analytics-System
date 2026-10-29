@@ -86,8 +86,9 @@ export interface AnalyzeUploadResult {
 
 const API_BASE = "/api";
 
-export interface User { id: number | null; username: string; display_name: string; role: "admin" | "operator" | "viewer" }
+export interface User { id: number | null; username: string; display_name: string; role: string; role_name?: string; permissions?: string[] }
 export interface Employee extends User { id: number; is_active: boolean }
+export interface Role { key: string; name: string; description: string; permissions: string[]; is_system: boolean }
 export interface Preferences { columns: 1 | 2 | 3 | 4; show_stats: boolean; show_archive: boolean; show_alerts: boolean; compact: boolean; default_tab: "dashboard" | "monitoring" | "analytics" | "lab" | "training" | "settings"; theme: "dark" | "light" | "system"; accent: string; animations: boolean; rounding: "none" | "small" | "large"; liquid_glass: boolean; transparency: number }
 export const defaultPreferences: Preferences = { columns: 3, show_stats: true, show_archive: true, show_alerts: true, compact: false, default_tab: "dashboard", theme: "dark", accent: "#6366f1", animations: true, rounding: "large", liquid_glass: true, transparency: 25 };
 export interface ModelCatalog { active_base: string; custom_weights: string | null; models: Array<{ id: string; label: string; filename: string; installed: boolean }> }
@@ -97,10 +98,17 @@ export interface Diagnostics { status: string; api: string; database: string; mo
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("X-Requested-With", "SchoolSecurity");
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: "same-origin" });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: "same-origin" });
+  } catch {
+    throw new Error("Нет соединения с сервером. Проверьте сеть и запуск backend.");
+  }
   if (!res.ok) {
     if (res.status === 401 && path !== "/auth/login") window.dispatchEvent(new Event("session-expired"));
-    let detail = `HTTP ${res.status}`;
+    let detail = res.status >= 500
+      ? "Сервер временно недоступен. Проверьте запуск backend или обратитесь к администратору."
+      : `Запрос не выполнен (код ${res.status})`;
     try {
       const data = await res.json();
       if (data?.detail) detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
@@ -123,6 +131,9 @@ export const api = {
   getPreferences: () => request<Preferences>("/preferences"),
   setPreferences: (value: Preferences) => request<Preferences>("/preferences", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value) }),
   getEmployees: () => request<Employee[]>("/employees"),
+  getRoles: () => request<Role[]>("/roles"),
+  createRole: (value: { name: string; description: string; permissions: string[] }) => request<Role>("/roles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value) }),
+  deleteRole: (key: string) => request<{ deleted: string }>(`/roles/${encodeURIComponent(key)}`, { method: "DELETE" }),
   getAudit: (limit = 100) => request<AuditEntry[]>(`/audit?limit=${limit}`),
   getDiagnostics: () => request<Diagnostics>("/system/diagnostics"),
   createEmployee: (value: { username: string; display_name: string; password: string; role: string }) => request<Employee>("/employees", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value) }),

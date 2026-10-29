@@ -43,8 +43,9 @@ def verify_api_key(
             path = request.url.path.rstrip("/")
             if path in {"/api/auth/logout", "/api/preferences"}:
                 return
-            operator_action = (path == "/api/analyze/upload" or (path.startswith("/api/violations/") and (path.endswith("/ack") or path.endswith("/review"))))
-            if principal["role"] != "admin" and not (principal["role"] == "operator" and operator_action):
+            permissions = principal.get("permissions", [])
+            permitted = (path == "/api/analyze/upload" and "analyze_files" in permissions) or (path.startswith("/api/violations/") and (path.endswith("/ack") or path.endswith("/review")) and "review_incidents" in permissions)
+            if principal["role"] != "admin" and not permitted:
                 raise HTTPException(status_code=403, detail="Недостаточно прав для этого действия")
         return
     raise HTTPException(status_code=401, detail="Требуется вход в систему")
