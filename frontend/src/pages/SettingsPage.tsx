@@ -47,15 +47,22 @@ export function SettingsPage({ user, preferences, onPreferences }: Props) {
       </label>
       <label className="block text-sm">Стартовая страница
         <select value={draft.default_tab} onChange={e => setDraft({ ...draft, default_tab: e.target.value as Preferences["default_tab"] })} className={input}>
-          <option value="dashboard">Мониторинг</option>
+          <option value="dashboard">Обзор</option>
+          <option value="monitoring">Мониторинг</option>
+          <option value="analytics">Аналитика</option>
           {user.role !== "viewer" && <option value="lab">Лаборатория</option>}
           {user.role === "admin" && <option value="training">Обучение</option>}
           <option value="settings">Настройки</option>
         </select>
       </label>
+      <div className="settings-subsection"><h3>Внешний вид</h3><p className="text-xs text-slate-400">Настройки сохраняются только для текущей учётной записи.</p></div>
+      <label className="block text-sm">Тема<select value={draft.theme} onChange={e => setDraft({ ...draft, theme: e.target.value as Preferences["theme"] })} className={input}><option value="dark">Тёмная</option><option value="light">Светлая</option><option value="system">Как в системе</option></select></label>
+      <label className="block text-sm">Акцентный цвет<select value={draft.accent} onChange={e => setDraft({ ...draft, accent: e.target.value as Preferences["accent"] })} className={input}><option value="indigo">Индиго</option><option value="blue">Синий</option><option value="emerald">Изумрудный</option><option value="violet">Фиолетовый</option><option value="rose">Розовый</option></select></label>
+      <label className="block text-sm">Скругление блоков<select value={draft.rounding} onChange={e => setDraft({ ...draft, rounding: e.target.value as Preferences["rounding"] })} className={input}><option value="none">Без скругления</option><option value="small">Небольшое</option><option value="large">Выраженное</option></select></label>
       {([ ["show_stats", "Сводная статистика"], ["show_archive", "Журнал инцидентов"], ["show_alerts", "Баннер новых событий"], ["compact", "Компактный режим"] ] as const).map(([key,label]) =>
         <label key={key} className="flex items-center gap-3 text-sm"><input type="checkbox" checked={draft[key]} onChange={e => setDraft({ ...draft, [key]: e.target.checked })} />{label}</label>
       )}
+      <label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={draft.animations} onChange={e => setDraft({ ...draft, animations: e.target.checked })} />Плавные анимации и переходы</label>
       {!draft.show_alerts && <p className="text-amber-300 text-xs">Баннер тревог будет скрыт; запись событий продолжится. Для поста охраны рекомендуем оставить его включённым.</p>}
       <button className="bg-indigo-600 rounded-lg px-4 py-2" onClick={() => run(async () => { const saved = await api.setPreferences(draft); onPreferences(saved); setMessage("Настройки интерфейса сохранены"); })}>Сохранить интерфейс</button>
     </fieldset>

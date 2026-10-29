@@ -5,6 +5,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { LabPage } from "./pages/LabPage";
 import { TrainingPage } from "./pages/TrainingPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { StatsOverview } from "./components/StatsOverview";
 
 export default function App() {
   const displayMode = window.location.pathname === "/display";
@@ -63,7 +64,7 @@ export default function App() {
   );
 
   return (
-    <div className={`min-h-screen bg-slate-950 text-slate-100 flex flex-col ${preferences.compact ? "compact-ui" : ""}`}>
+    <div className={`app-shell min-h-screen text-slate-100 flex flex-col theme-${preferences.theme} accent-${preferences.accent} rounding-${preferences.rounding} ${preferences.compact ? "compact-ui" : ""} ${preferences.animations ? "" : "no-animations"}`}>
       {!displayMode && <Navbar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
@@ -77,7 +78,9 @@ export default function App() {
           <span>Автоматические срабатывания требуют проверки человеком. Отсутствие тревоги не гарантирует безопасность.</span>
           <button onClick={async () => { await api.logout(); setAuthenticated(false); setGlobalStats(null); setUser(null); }} className="border border-slate-700 rounded-lg px-3 py-2 shrink-0">{user?.display_name} · Выйти</button>
         </div>}
-        {(displayMode || activeTab === "dashboard") && <DashboardPage onGlobalStatsUpdate={setGlobalStats} preferences={preferences} role={user?.role ?? "viewer"} displayMode={displayMode} />}
+        {(displayMode || activeTab === "dashboard") && <div className="space-y-6"><div className="page-heading"><p className="eyebrow">Центр управления безопасностью</p><h2>Обзор ситуации</h2><p>Ключевые показатели состояния камер и событий за текущий период.</p></div><StatsOverview stats={globalStats} /><div className="quick-note"><span>Нужна детализация?</span><button onClick={() => setActiveTab("analytics")}>Открыть полную аналитику →</button></div></div>}
+        {activeTab === "monitoring" && <DashboardPage onGlobalStatsUpdate={setGlobalStats} preferences={preferences} role={user?.role ?? "viewer"} displayMode={displayMode} />}
+        {activeTab === "analytics" && <div className="space-y-6"><div className="page-heading"><p className="eyebrow">Отчёты и динамика</p><h2>Подробная аналитика</h2><p>Распределение событий, временная динамика и качество работы детектора.</p></div><StatsOverview stats={globalStats} detailed /></div>}
         {activeTab === "lab" && user?.role !== "viewer" && <LabPage />}
         {activeTab === "training" && user?.role === "admin" && <TrainingPage />}
         {activeTab === "settings" && user && <SettingsPage user={user} preferences={preferences} onPreferences={setPreferences} />}

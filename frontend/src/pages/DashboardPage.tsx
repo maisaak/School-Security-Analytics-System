@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Play, Plus, RefreshCw, X } from "lucide-react";
 import { api, Camera, DashboardStats, Preferences, User, Violation } from "../api/client";
-import { StatsOverview } from "../components/StatsOverview";
 import { CameraCard } from "../components/CameraCard";
 import { AddCameraModal } from "../components/AddCameraModal";
 import { VIOLATION_META, ViolationsTable } from "../components/ViolationsTable";
@@ -15,7 +14,6 @@ interface DashboardPageProps {
 }
 
 export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdate, preferences, role, displayMode = false }) => {
-  const [stats, setStats] = useState<DashboardStats | null>(null);
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [violations, setViolations] = useState<Violation[]>([]);
 
@@ -60,7 +58,6 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
           unacknowledged_only: onlyUnack,
         }),
       ]);
-      setStats(st);
       onGlobalStatsUpdate(st);
       setCameras(cams);
       setViolations(viols);
@@ -148,8 +145,6 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
         </div>
       )}
 
-      {!displayMode && preferences.show_stats && <StatsOverview stats={stats} />}
-
       <section className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -178,6 +173,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
         </div>
 
         <div className={`grid gap-5 ${ {1: "grid-cols-1", 2: "grid-cols-1 md:grid-cols-2", 3: "grid-cols-1 md:grid-cols-2 xl:grid-cols-3", 4: "grid-cols-1 md:grid-cols-2 xl:grid-cols-4"}[preferences.columns] }`}>
+          {cameras.length === 0 && <div className="col-span-full rounded-2xl border border-dashed border-slate-700 bg-slate-900 p-10 text-center"><h3 className="font-semibold">Камеры ещё не добавлены</h3><p className="text-sm text-slate-400 mt-2">{role === "admin" ? "Добавьте RTSP-камеру или тестовый источник, чтобы начать мониторинг." : "Попросите администратора подключить камеры."}</p></div>}
           {cameras.map((cam) => (
             <CameraCard
               key={cam.id}

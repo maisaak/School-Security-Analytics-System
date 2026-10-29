@@ -85,8 +85,8 @@ const API_BASE = "/api";
 
 export interface User { id: number | null; username: string; display_name: string; role: "admin" | "operator" | "viewer" }
 export interface Employee extends User { id: number; is_active: boolean }
-export interface Preferences { columns: 1 | 2 | 3 | 4; show_stats: boolean; show_archive: boolean; show_alerts: boolean; compact: boolean; default_tab: "dashboard" | "lab" | "training" | "settings" }
-export const defaultPreferences: Preferences = { columns: 3, show_stats: true, show_archive: true, show_alerts: true, compact: false, default_tab: "dashboard" };
+export interface Preferences { columns: 1 | 2 | 3 | 4; show_stats: boolean; show_archive: boolean; show_alerts: boolean; compact: boolean; default_tab: "dashboard" | "monitoring" | "analytics" | "lab" | "training" | "settings"; theme: "dark" | "light" | "system"; accent: "indigo" | "blue" | "emerald" | "violet" | "rose"; animations: boolean; rounding: "none" | "small" | "large" }
+export const defaultPreferences: Preferences = { columns: 3, show_stats: true, show_archive: true, show_alerts: true, compact: false, default_tab: "dashboard", theme: "dark", accent: "indigo", animations: true, rounding: "large" };
 export interface ModelCatalog { active_base: string; custom_weights: string | null; models: Array<{ id: string; label: string; filename: string; installed: boolean }> }
 export interface AuditEntry { id: number; employee_id: number | null; username: string; action: string; method: string; path: string; status_code: number; ip_address: string | null; created_at: string }
 export interface Diagnostics { status: string; api: string; database: string; model: { base: string; active: string; path_exists: boolean }; disk: { free_bytes: number; total_bytes: number; free_percent: number }; training: { running_jobs: number; local_enabled: boolean }; cameras: Array<{ id: number; name: string; active: boolean; online: boolean; fps: number; latency_ms: number; last_error: string | null }> }

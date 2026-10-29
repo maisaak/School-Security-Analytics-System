@@ -4,9 +4,10 @@ import { DashboardStats } from "../api/client";
 
 interface StatsOverviewProps {
   stats: DashboardStats | null;
+  detailed?: boolean;
 }
 
-export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats }) => {
+export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats, detailed = false }) => {
   const totalThreats = Math.max(1, stats?.total_violations ?? 0);
   const weaponCount = stats?.by_type?.weapon ?? 0;
   const bagCount = stats?.by_type?.suspicious_bag ?? 0;
@@ -16,12 +17,12 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats }) => {
     {
       title: "Активные потоки RTSP",
       value: stats ? `${stats.active_cameras} / ${stats.total_cameras}` : "—",
-      sub: "Многопоточный захват 12 FPS",
+      sub: "Камеры на связи / всего",
       icon: Video,
       accent: "text-emerald-400 bg-emerald-500/10 border-emerald-500/25",
     },
     {
-      title: "Зафиксировано нарушений",
+      title: "Зафиксировано событий",
       value: stats ? String(stats.total_violations) : "—",
       sub: stats
         ? `Ожидают проверки: ${stats.unacknowledged_violations}`
@@ -30,9 +31,9 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats }) => {
       accent: "text-amber-400 bg-amber-500/10 border-amber-500/25",
     },
     {
-      title: "Критические инциденты",
-      value: String(weaponCount + bagCount),
-      sub: `Оружие: ${weaponCount} · Бесхозные сумки: ${bagCount}`,
+      title: "Ожидают проверки",
+      value: stats ? String(stats.unacknowledged_violations) : "—",
+      sub: "Требуют внимания оператора",
       icon: Shield,
       accent: "text-red-400 bg-red-500/10 border-red-500/25",
     },
@@ -69,7 +70,7 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats }) => {
         ))}
       </div>
 
-      {stats && (
+      {detailed && stats && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2 bg-slate-900/90 border border-slate-800 rounded-2xl p-4">
             <div className="flex items-center justify-between mb-3">
@@ -114,7 +115,7 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats }) => {
                     <div
                       className="w-full rounded-sm bg-indigo-500/80 transition-all duration-500"
                       style={{
-                        height: `${bucket.count === 0 ? 8 : Math.max(18, (bucket.count / maxBucket) * 100)}%`,
+                        height: `${(bucket.count / maxBucket) * 100}%`,
                         opacity: bucket.count === 0 ? 0.25 : 1,
                       }}
                       title={`${bucket.label}: ${bucket.count}`}

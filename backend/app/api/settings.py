@@ -29,7 +29,11 @@ class Preferences(BaseModel):
     show_archive: bool = True
     show_alerts: bool = True
     compact: bool = False
-    default_tab: Literal["dashboard", "lab", "training", "settings"] = "dashboard"
+    default_tab: Literal["dashboard", "monitoring", "analytics", "lab", "training", "settings"] = "dashboard"
+    theme: Literal["dark", "light", "system"] = "dark"
+    accent: Literal["indigo", "blue", "emerald", "violet", "rose"] = "indigo"
+    animations: bool = True
+    rounding: Literal["none", "small", "large"] = "large"
 
 
 def preferences_key(request: Request) -> str:
