@@ -11,11 +11,13 @@ from pathlib import Path
 import cv2
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
+from csv import writer
+from io import StringIO
 from sqlalchemy.orm import Session
 
 from app.api.schemas import CameraCreate, CameraOut, RetrainJobOut, RetrainRequest, SimulateRequest, ViolationOut, ViolationReview
 from app.core.config import PROJECT_ROOT, settings
-from app.core.security import read_upload_sync, redact_stream_url, safe_delete_media_file, validate_dataset_yaml, validate_stream_source, verify_api_key, require_admin
+from app.core.security import read_upload_sync, redact_stream_url, safe_delete_media_file, validate_dataset_yaml, validate_stream_source, verify_api_key, require_admin, require_permission
 from app.db.models import AuditLog, Camera, RetrainJob, Violation
 from app.db.session import get_db
 from app.models.detector import detector
@@ -86,6 +88,16 @@ def toggle_camera(camera_id: int, db: Session = Depends(get_db)):
     return _serialize_camera(cam)
 
 
+@router.post("/cameras/{camera_id}/reconnect", response_model=CameraOut)
+def reconnect_camera(camera_id: int, db: Session = Depends(get_db)):
+    cam = db.get(Camera, camera_id)
+    if not cam or cam.rtsp_url == "lab://uploads":
+        raise HTTPException(status_code=404, detail="Камера не найдена")
+    stream_manager.stop_camera(camera_id)
+    stream_manager.start_camera(cam.id, cam.name, cam.rtsp_url, is_active=cam.is_active)
+    return _serialize_camera(cam)
+
+
 @router.post("/cameras/{camera_id}/simulate")
 def simulate_camera_event(camera_id: int, payload: SimulateRequest):
     if not stream_manager.trigger_scenario(camera_id, payload.scenario):
@@ -144,6 +156,21 @@ def list_violations(violation_type: str | None = None, camera_id: int | None = N
     if unacknowledged_only:
         query = query.filter(Violation.is_acknowledged.is_(False))
     return [_serialize_violation(v) for v in query.order_by(Violation.detected_at.desc(), Violation.id.desc()).offset(offset).limit(limit).all()]
+
+
+@router.get("/violations/export.csv", dependencies=[Depends(require_permission("export_archive"))])
+def export_violations_csv(violation_type: str | None = None, camera_id: int | None = None, review_status: str | None = None, unacknowledged_only: bool = False, db: Session = Depends(get_db)):
+    query = db.query(Violation)
+    if violation_type: query = query.filter(Violation.violation_type == violation_type)
+    if camera_id is not None: query = query.filter(Violation.camera_id == camera_id)
+    if review_status: query = query.filter(Violation.review_status == review_status)
+    if unacknowledged_only: query = query.filter(Violation.is_acknowledged.is_(False))
+    output = StringIO()
+    csv = writer(output)
+    csv.writerow(["ID", "Тип угрозы", "Камера", "Зона", "Уверенность", "Статус", "Подтверждено", "Комментарий", "Время"])
+    for row in query.order_by(Violation.detected_at.desc(), Violation.id.desc()).limit(5000).all():
+        csv.writerow([row.id, row.violation_type, row.camera.name if row.camera else "Архив", row.camera.location if row.camera else "Архив", f"{row.confidence:.4f}", row.review_status, "да" if row.is_acknowledged else "нет", row.review_comment or "", row.detected_at.isoformat()])
+    return Response(output.getvalue().encode("utf-8-sig"), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=violations.csv", "Cache-Control": "private, no-store"})
 
 
 @router.patch("/violations/{violation_id}/ack", response_model=ViolationOut)
@@ -214,7 +241,12 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
     confirmed = sum(v.review_status in {"confirmed", "closed"} or v.is_acknowledged for v in viols)
     pending = sum(v.review_status in {"new", "in_review"} and not v.is_acknowledged for v in viols)
     false_alarms = sum(v.review_status == "false_alarm" for v in viols)
-    return {"total_cameras": len(cams), "active_cameras": sum(stream_manager.get_telemetry(c.id)["online"] for c in cams), "total_violations": len(viols), "unacknowledged_violations": sum(not v.is_acknowledged for v in viols), "confirmed_violations": confirmed, "pending_violations": pending, "false_alarm_violations": false_alarms, "average_confidence": round(sum(v.confidence for v in viols) / len(viols), 4) if viols else 0, "by_type": by_type, "timeline": timeline, "model": {"active_weights": detector.active_weights_name, "reloaded_at": detector.reloaded_at, "avg_latency_ms": round(sum(latencies) / len(latencies), 1) if latencies else 0}}
+    by_camera = []
+    for cam in cams:
+        camera_viols = [v for v in viols if v.camera_id == cam.id]
+        telemetry = stream_manager.get_telemetry(cam.id)
+        by_camera.append({"id": cam.id, "name": cam.name, "location": cam.location, "total": len(camera_viols), "unacknowledged": sum(not v.is_acknowledged for v in camera_viols), "online": telemetry["online"], "latency_ms": telemetry["latency_ms"]})
+    return {"total_cameras": len(cams), "active_cameras": sum(stream_manager.get_telemetry(c.id)["online"] for c in cams), "total_violations": len(viols), "unacknowledged_violations": sum(not v.is_acknowledged for v in viols), "confirmed_violations": confirmed, "pending_violations": pending, "false_alarm_violations": false_alarms, "average_confidence": round(sum(v.confidence for v in viols) / len(viols), 4) if viols else 0, "by_type": by_type, "timeline": timeline, "by_camera": by_camera, "model": {"active_weights": detector.active_weights_name, "reloaded_at": detector.reloaded_at, "avg_latency_ms": round(sum(latencies) / len(latencies), 1) if latencies else 0}}
 
 
 @router.get("/audit", dependencies=[Depends(require_admin)])

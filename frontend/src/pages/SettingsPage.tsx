@@ -2,16 +2,27 @@ import React, { useEffect, useState } from "react";
 import { api, AuditEntry, Diagnostics, Employee, ModelCatalog, Preferences, Role, User } from "../api/client";
 import { CustomSelect } from "../components/CustomSelect";
 import { ColorWheel } from "../components/ColorWheel";
+import { CustomMultiSelect } from "../components/CustomMultiSelect";
 
 interface Props { user: User; preferences: Preferences; onPreferences: (value: Preferences) => void; onPreview: (value: Preferences | null) => void }
 const input = "custom-input";
 const roleName: Record<string, string> = { admin: "Администратор", operator: "Охрана", viewer: "Директор" };
-const permissionOptions = [{ key: "review_incidents", label: "Обработка инцидентов" }, { key: "analyze_files", label: "Проверка фото и видео" }];
+const permissionOptions = [
+  { key: "view_monitoring", label: "Просмотр камер и мониторинга" },
+  { key: "review_incidents", label: "Обработка инцидентов" },
+  { key: "analyze_files", label: "Проверка фото и видео" },
+  { key: "manage_cameras", label: "Добавление и настройка камер" },
+  { key: "manage_employees", label: "Сотрудники и доступ" },
+  { key: "manage_models", label: "Выбор моделей YOLO" },
+  { key: "train_model", label: "Дообучение модели" },
+  { key: "export_archive", label: "Экспорт архива и отчётов" },
+];
 
 export function SettingsPage({ user, preferences, onPreferences, onPreview }: Props) {
   const [draft, setDraft] = useState(preferences);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
+  const [rolesLoading, setRolesLoading] = useState(false);
   const [newRole, setNewRole] = useState({ name: "", description: "", permissions: [] as string[] });
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [model, setModel] = useState("");
@@ -24,6 +35,9 @@ export function SettingsPage({ user, preferences, onPreferences, onPreview }: Pr
   const [newPassword, setNewPassword] = useState("");
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
+  const [sessions, setSessions] = useState<Array<{ expires_at: string; current: boolean }>>([]);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPasswordValue, setNewPasswordValue] = useState("");
 
   useEffect(() => { onPreview(draft); }, [draft, onPreview]);
   useEffect(() => () => onPreview(null), [onPreview]);
@@ -31,9 +45,13 @@ export function SettingsPage({ user, preferences, onPreferences, onPreview }: Pr
   useEffect(() => {
     api.modelCatalog().then(c => { setCatalog(c); setModel(c.models.find(m => m.filename === c.active_base)?.id ?? "yolov8n"); }).catch(e => setError(e.message));
     if (user.role === "admin") api.getEmployees().then(setEmployees).catch(e => setError(e.message));
-    if (user.role === "admin") api.getRoles().then(setRoles).catch(e => setError(e.message));
+    if (user.role === "admin") {
+      setRolesLoading(true);
+      api.getRoles().then(setRoles).catch(e => setError(`Не удалось загрузить роли: ${e.message}`)).finally(() => setRolesLoading(false));
+    }
     if (user.role === "admin") api.getAudit(100).then(setAudit).catch(e => setError(e.message));
     if (user.role === "admin") api.getDiagnostics().then(setDiagnostics).catch(e => setError(e.message));
+    api.getSessions().then(setSessions).catch(e => setError(e.message));
   }, [user.role]);
 
   async function run(action: () => Promise<void>) {
@@ -42,10 +60,34 @@ export function SettingsPage({ user, preferences, onPreferences, onPreview }: Pr
     finally { setBusy(false); }
   }
 
+  const baseRoleOptions = roles.length ? roles.map(role => ({ value: role.key, label: role.name, hint: role.description })) : [
+    { value: "admin", label: "Администратор", hint: "Полный доступ к системе" },
+    { value: "operator", label: "Охрана", hint: "Мониторинг и обработка тревог" },
+    { value: "viewer", label: "Директор", hint: "Просмотр камер, архива и аналитики" },
+  ];
+  const roleOptions = newUser.role !== "" && !baseRoleOptions.some(role => role.value === newUser.role)
+    ? [...baseRoleOptions, { value: newUser.role, label: "Текущая роль", hint: "Роль не найдена в загруженном списке" }]
+    : baseRoleOptions;
+
   return <div className="space-y-6">
     <h2 className="text-xl font-semibold">Настройки · {user.display_name} ({roleName[user.role]})</h2>
     {error && <p role="alert" className="bg-red-950 text-red-200 p-3 rounded-xl">{error}</p>}
     {message && <p role="status" className="bg-emerald-950 text-emerald-200 p-3 rounded-xl">{message}</p>}
+    {user.role === "admin" && <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+      <div className="settings-panel-title">Уведомления о тревогах</div>
+      <p className="text-xs text-slate-400">Telegram и webhook настраиваются администратором на сервере в файле `.env`. При срабатывании система отправляет тип угрозы, камеру и уверенность детектора.</p>
+      <div className="notification-hints"><span>Telegram: <b>TELEGRAM_BOT_TOKEN</b> + <b>TELEGRAM_CHAT_ID</b></span><span>Webhook: <b>NOTIFICATION_WEBHOOK_URL</b></span><span>Ограничение повторов: <b>NOTIFICATION_COOLDOWN_SEC</b></span></div>
+    </section>}
+    <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+      <div className="settings-panel-title">Профиль и безопасность</div>
+      <p className="text-xs text-slate-400">{user.display_name} · {user.role_name ?? roleName[user.role] ?? "Пользовательская роль"}. Смена пароля завершит все активные сессии.</p>
+      <form className="profile-password-form" onSubmit={event => { event.preventDefault(); run(async () => { await api.changePassword(currentPassword, newPasswordValue); setCurrentPassword(""); setNewPasswordValue(""); setMessage("Пароль изменён. Войдите снова с новым паролем."); }); }}>
+        <input className={input} type="password" minLength={1} autoComplete="current-password" placeholder="Текущий пароль" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} required />
+        <input className={input} type="password" minLength={12} autoComplete="new-password" placeholder="Новый пароль (минимум 12 символов)" value={newPasswordValue} onChange={event => setNewPasswordValue(event.target.value)} required />
+        <button className="accent-button rounded-lg px-4 py-2" disabled={busy}>Изменить пароль</button>
+      </form>
+      <div className="session-list"><div className="flex items-center justify-between gap-3"><strong className="text-sm">Активные сессии: {sessions.length}</strong><button className="border border-slate-700 rounded-lg px-3 py-2 text-xs" onClick={() => run(async () => { await api.revokeAllSessions(); setSessions([]); setMessage("Все сессии завершены"); })}>Выйти со всех устройств</button></div>{sessions.map((session, index) => <div className="session-row" key={`${session.expires_at}-${index}`}><span>{session.current ? "Текущая сессия" : "Другое устройство"}</span><small>до {new Date(session.expires_at).toLocaleString("ru-RU")}</small></div>)}</div>
+    </section>
     <fieldset disabled={busy} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
       <div className="settings-panel-title">Мой интерфейс</div>
       <p className="text-xs text-slate-400">Сохраняется на сервере отдельно для каждой учётной записи. Скрытие блока не меняет права доступа.</p>
@@ -79,18 +121,19 @@ export function SettingsPage({ user, preferences, onPreferences, onPreview }: Pr
     </fieldset>
 
     {user.role === "admin" && <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-      <h3 className="text-lg font-semibold">Доступ сотрудников</h3>
+       <h3 className="text-lg font-semibold">Доступ сотрудников</h3>
        <p className="text-xs text-slate-400">Директор: просмотр камер, архива и аналитики. Охрана: просмотр, проверка файлов и обработка инцидентов. Администратор: камеры, модели, обучение и сотрудники. Отключение, смена роли или пароля отзывает все сессии сотрудника.</p>
+       {error?.startsWith("Не удалось загрузить роли") && <div className="settings-inline-warning"><span>Список ролей временно недоступен. Используются базовые роли.</span><button type="button" onClick={() => { setError(null); setRolesLoading(true); api.getRoles().then(setRoles).catch(e => setError(`Не удалось загрузить роли: ${e.message}`)).finally(() => setRolesLoading(false)); }}>Повторить</button></div>}
        <form className="grid md:grid-cols-2 gap-3" onSubmit={e => { e.preventDefault(); run(async () => { await api.createEmployee(newUser); setEmployees(await api.getEmployees()); setNewUser({ username: "", display_name: "", password: "", role: roles[0]?.key ?? "viewer" }); setMessage("Сотрудник создан. Передайте логин и пароль безопасным способом."); }); }}>
         <input required aria-label="Логин сотрудника" placeholder="Логин: латиница, 3–64 символа" pattern="[a-z0-9][a-z0-9_.\-]{2,63}" value={newUser.username} onChange={e => setNewUser({ ...newUser, username: e.target.value })} className={input} />
         <input required aria-label="Имя сотрудника" placeholder="Имя сотрудника" value={newUser.display_name} onChange={e => setNewUser({ ...newUser, display_name: e.target.value })} className={input} />
         <input required type="password" minLength={12} maxLength={256} autoComplete="new-password" aria-label="Пароль сотрудника" placeholder="Пароль: минимум 12 символов" value={newUser.password} onChange={e => setNewUser({ ...newUser, password: e.target.value })} className={input} />
-         <CustomSelect ariaLabel="Роль нового сотрудника" value={newUser.role} onChange={value => setNewUser({ ...newUser, role: String(value) })} options={roles.map(role => ({ value: role.key, label: role.name, hint: role.description }))} />
+         <CustomSelect ariaLabel="Роль нового сотрудника" value={newUser.role} onChange={value => setNewUser({ ...newUser, role: String(value) })} options={roleOptions} disabled={rolesLoading} />
          <button disabled={busy} className="accent-button rounded-lg px-4 py-2">Создать сотрудника</button>
       </form>
       <div className="space-y-3">{employees.map(employee => <div key={employee.id} className="border-t border-slate-700 pt-3 flex flex-wrap items-center gap-3">
         <span className="flex-1">{employee.display_name} · {employee.username} {!employee.is_active && "(отключён)"}</span>
-          <CustomSelect className="employee-role-select" disabled={busy || employee.id === user.id} ariaLabel={`Роль ${employee.username}`} value={employee.role} onChange={role => { run(async () => { await api.updateEmployee(employee.id, { role: String(role) }); setEmployees(await api.getEmployees()); }); }} options={roles.map(role => ({ value: role.key, label: role.name, hint: role.description }))} />
+           <CustomSelect className="employee-role-select" disabled={busy || rolesLoading || employee.id === user.id} ariaLabel={`Роль ${employee.username}`} value={employee.role} onChange={role => { run(async () => { await api.updateEmployee(employee.id, { role: String(role) }); setEmployees(await api.getEmployees()); }); }} options={roleOptions} />
         <button disabled={busy || employee.id === user.id} onClick={() => run(async () => { await api.updateEmployee(employee.id, { is_active: !employee.is_active }); setEmployees(await api.getEmployees()); })} className="border border-slate-600 rounded-lg p-2">{employee.is_active ? "Отключить" : "Включить"}</button>
         <button onClick={() => { setResetId(employee.id); setNewPassword(""); }} className="border border-slate-600 rounded-lg p-2">Новый пароль</button>
       </div>)}</div>
@@ -103,7 +146,7 @@ export function SettingsPage({ user, preferences, onPreferences, onPreview }: Pr
         <form className="role-builder-form" onSubmit={e => { e.preventDefault(); run(async () => { await api.createRole(newRole); setRoles(await api.getRoles()); setNewRole({ name: "", description: "", permissions: [] }); setMessage("Роль создана"); }); }}>
           <input required maxLength={80} className={input} placeholder="Название роли, например Архивариус" value={newRole.name} onChange={e => setNewRole({ ...newRole, name: e.target.value })} />
           <input maxLength={240} className={input} placeholder="Функция роли" value={newRole.description} onChange={e => setNewRole({ ...newRole, description: e.target.value })} />
-          <div className="role-permissions">{permissionOptions.map(permission => <label className="custom-check-row" key={permission.key}><input className="custom-checkbox" type="checkbox" checked={newRole.permissions.includes(permission.key)} onChange={e => setNewRole({ ...newRole, permissions: e.target.checked ? [...newRole.permissions, permission.key] : newRole.permissions.filter(value => value !== permission.key) })} /><span>{permission.label}</span></label>)}</div>
+          <CustomMultiSelect disabled={busy} value={newRole.permissions} onChange={permissions => setNewRole({ ...newRole, permissions })} options={permissionOptions.map(permission => ({ value: permission.key, label: permission.label }))} />
           <button disabled={busy} className="accent-button rounded-lg px-4 py-2">Создать роль</button>
         </form>
         <div className="role-list">{roles.filter(role => !role.is_system).map(role => <div className="role-card" key={role.key}><div><strong>{role.name}</strong><span>{role.description || "Без описания"}</span></div><button disabled={busy} onClick={() => run(async () => { await api.deleteRole(role.key); setRoles(await api.getRoles()); setMessage("Роль удалена"); })}>Удалить</button></div>)}</div>

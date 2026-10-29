@@ -10,10 +10,11 @@ interface DashboardPageProps {
   onGlobalStatsUpdate: (stats: DashboardStats) => void;
   preferences: Preferences;
   role: User["role"];
+  permissions?: string[];
   displayMode?: boolean;
 }
 
-export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdate, preferences, role, displayMode = false }) => {
+export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdate, preferences, role, permissions = [], displayMode = false }) => {
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [violations, setViolations] = useState<Violation[]>([]);
 
@@ -178,14 +179,15 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
             <CameraCard
               key={cam.id}
               camera={cam}
-              canManage={role === "admin"}
+              canManage={role === "admin" || permissions.includes("manage_cameras")}
+              onReconnect={async id => { try { await api.reconnectCamera(id); fetchAll(); } catch (err) { setError(err instanceof Error ? err.message : "Ошибка переподключения"); } }}
               onToggle={async (id) => {
                 try {
                 await api.toggleCamera(id);
                 fetchAll();
                 } catch (err) { setError(err instanceof Error ? err.message : "Ошибка управления камерой"); }
               }}
-              onDelete={async (id) => {
+         onDelete={async (id) => {
                 if (!window.confirm("Удалить камеру и её архив инцидентов?")) return;
                 try {
                 await api.deleteCamera(id);
@@ -204,8 +206,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
       </section>
 
       {!displayMode && preferences.show_archive && <ViolationsTable
-        canAcknowledge={role !== "viewer"}
-        canDelete={role === "admin"}
+         canAcknowledge={role === "admin" || permissions.includes("review_incidents")}
+         canDelete={role === "admin" || permissions.includes("manage_cameras")}
         violations={violations}
         cameras={cameras}
         filterType={filterType}
@@ -225,8 +227,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
           await api.deleteViolation(id);
           fetchAll();
           } catch (err) { setError(err instanceof Error ? err.message : "Ошибка удаления инцидента"); }
-        }}
-      />}
+         }}
+         onExport={() => api.exportViolations({ violation_type: filterType || undefined, camera_id: filterCameraId, review_status: reviewStatus || undefined, unacknowledged_only: onlyUnack }).catch(err => setError(err instanceof Error ? err.message : "Ошибка экспорта архива"))}
+       />}
 
       <AddCameraModal
         open={showAddModal}
@@ -238,7 +241,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
       />
 
       <VideoModal
-        canAcknowledge={role !== "viewer"}
+         canAcknowledge={role === "admin" || permissions.includes("review_incidents")}
         violation={activeVideo}
         onClose={() => setActiveVideo(null)}
         onAcknowledge={handleAcknowledge}

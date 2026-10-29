@@ -9,6 +9,8 @@ interface NavbarProps {
   unacknowledgedCount: number;
   activeWeights: string;
   role: string;
+  roleName?: string;
+  permissions?: string[];
   displayName: string;
   onLogout: () => Promise<void>;
 }
@@ -19,6 +21,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   unacknowledgedCount,
   activeWeights,
   role,
+  roleName,
+  permissions = [],
   displayName,
   onLogout,
 }) => {
@@ -38,11 +42,11 @@ export const Navbar: React.FC<NavbarProps> = ({
       <div className="topbar-panel">
         <div className="topbar-brand" title={`Веса модели: ${activeWeights}`}>
           <span className="topbar-brand-mark"><Shield aria-hidden="true" /></span>
-          <div><h1>Школьный мониторинг</h1><p>School Security · {role === "admin" ? "Администратор" : role === "operator" ? "Охрана" : "Директор"}</p></div>
+          <div><h1>Школьный мониторинг</h1><p>School Security · {roleName ?? (role === "admin" ? "Администратор" : role === "operator" ? "Охрана" : role === "viewer" ? "Директор" : "Пользовательская роль")}</p></div>
         </div>
         <div className="topbar-navigation">
           <nav aria-label="Основные разделы" className="topbar-nav">
-            {tabs.filter(t => t.id !== "training" || role === "admin").filter(t => t.id !== "lab" || role !== "viewer").map(({ id, label, icon: Icon, badge }) => {
+            {tabs.filter(t => t.id !== "training" || role === "admin" || permissions.includes("train_model")).filter(t => t.id !== "lab" || role !== "viewer" || permissions.includes("analyze_files")).map(({ id, label, icon: Icon, badge }) => {
               const active = activeTab === id;
               return (
                 <button

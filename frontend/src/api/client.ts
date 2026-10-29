@@ -45,6 +45,7 @@ export interface DashboardStats {
   average_confidence: number;
   by_type: Record<string, number>;
   timeline: Array<{ label: string; count: number }>;
+  by_camera: Array<{ id: number; name: string; location: string; total: number; unacknowledged: number; online: boolean; latency_ms: number }>;
   model: {
     active_weights: string;
     reloaded_at: string;
@@ -94,6 +95,7 @@ export const defaultPreferences: Preferences = { columns: 3, show_stats: true, s
 export interface ModelCatalog { active_base: string; custom_weights: string | null; models: Array<{ id: string; label: string; filename: string; installed: boolean }> }
 export interface AuditEntry { id: number; employee_id: number | null; username: string; action: string; method: string; path: string; status_code: number; ip_address: string | null; created_at: string }
 export interface Diagnostics { status: string; api: string; database: string; model: { base: string; active: string; path_exists: boolean }; disk: { free_bytes: number; total_bytes: number; free_percent: number }; training: { running_jobs: number; local_enabled: boolean }; cameras: Array<{ id: number; name: string; active: boolean; online: boolean; fps: number; latency_ms: number; last_error: string | null }> }
+export interface ActiveSession { expires_at: string; current: boolean }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
@@ -144,6 +146,9 @@ export const api = {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_key: key }),
   }),
   logout: () => request("/auth/logout", { method: "POST" }),
+  getSessions: () => request<ActiveSession[]>("/auth/sessions"),
+  revokeAllSessions: () => request<{ revoked: boolean }>("/auth/sessions/revoke-all", { method: "POST" }),
+  changePassword: (current_password: string, new_password: string) => request<{ changed: boolean }>("/auth/password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ current_password, new_password }) }),
   getStats: () => request<DashboardStats>("/stats"),
 
   getCameras: () => request<Camera[]>("/cameras"),
@@ -157,6 +162,7 @@ export const api = {
 
   toggleCamera: (id: number) =>
     request<Camera>(`/cameras/${id}/toggle`, { method: "POST" }),
+  reconnectCamera: (id: number) => request<Camera>(`/cameras/${id}/reconnect`, { method: "POST" }),
 
   deleteCamera: (id: number) =>
     request<void>(`/cameras/${id}`, { method: "DELETE" }),
@@ -184,6 +190,17 @@ export const api = {
     if (params?.unacknowledged_only) q.set("unacknowledged_only", "true");
     const suffix = q.toString() ? `?${q.toString()}` : "";
     return request<Violation[]>(`/violations${suffix}`);
+  },
+  exportViolations: async (params?: { violation_type?: string; camera_id?: number; review_status?: string; unacknowledged_only?: boolean }) => {
+    const q = new URLSearchParams();
+    if (params?.violation_type) q.set("violation_type", params.violation_type);
+    if (params?.camera_id) q.set("camera_id", String(params.camera_id));
+    if (params?.review_status) q.set("review_status", params.review_status);
+    if (params?.unacknowledged_only) q.set("unacknowledged_only", "true");
+    const response = await fetch(`${API_BASE}/violations/export.csv${q.toString() ? `?${q}` : ""}`, { credentials: "same-origin", headers: { "X-Requested-With": "SchoolSecurity" } });
+    if (!response.ok) throw new Error(response.status === 403 ? "Нет права на экспорт архива" : `Не удалось экспортировать архив (код ${response.status})`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = "violations.csv"; link.click(); URL.revokeObjectURL(url);
   },
 
   acknowledgeViolation: (id: number) =>

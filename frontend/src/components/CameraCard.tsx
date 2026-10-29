@@ -1,11 +1,12 @@
 import React from "react";
-import { Maximize2, Pause, Play, Sparkles, Trash2 } from "lucide-react";
+import { Maximize2, Pause, Play, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import { Camera } from "../api/client";
 
 interface CameraCardProps {
   camera: Camera;
   canManage: boolean;
   onToggle: (id: number) => void;
+  onReconnect: (id: number) => void;
   onDelete: (id: number) => void;
   onSimulate: (
     id: number,
@@ -18,6 +19,7 @@ export const CameraCard: React.FC<CameraCardProps> = ({
   camera,
   canManage,
   onToggle,
+  onReconnect,
   onDelete,
   onSimulate,
   onExpand,
@@ -99,6 +101,11 @@ export const CameraCard: React.FC<CameraCardProps> = ({
           </div>
 
           {canManage && <div className="flex items-center gap-1 shrink-0">
+            <button
+              onClick={() => onReconnect(camera.id)}
+              title="Переподключить камеру"
+              className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            ><RefreshCw className="w-4 h-4" /></button>
             <button
               onClick={() => onToggle(camera.id)}
               title={camera.is_active ? "Приостановить поток" : "Возобновить поток"}

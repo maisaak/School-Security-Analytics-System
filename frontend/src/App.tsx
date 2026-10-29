@@ -95,6 +95,8 @@ export default function App() {
         unacknowledgedCount={globalStats?.unacknowledged_violations ?? 0}
         activeWeights={globalStats?.model.active_weights ?? "Ожидание модели"}
         role={user?.role ?? "viewer"}
+        roleName={user?.role_name}
+        permissions={user?.permissions}
         displayName={user?.display_name ?? "Сотрудник"}
         onLogout={async () => { await api.logout(); setAuthenticated(false); setGlobalStats(null); setUser(null); }}
       />}
@@ -104,7 +106,7 @@ export default function App() {
           <div className="space-y-2"><ConnectionStatus /><p>Автоматические срабатывания требуют проверки человеком. Отсутствие тревоги не гарантирует безопасность.</p></div>
         </div>}
         {(displayMode || activeTab === "dashboard") && <div className="space-y-6"><div className="page-heading"><p className="eyebrow">Центр управления безопасностью</p><h2>Обзор ситуации</h2><p>Ключевые показатели состояния камер и событий за текущий период.</p></div><StatsOverview stats={globalStats} /><div className="quick-note"><span>Нужна детализация?</span><button onClick={() => setActiveTab("analytics")}>Открыть полную аналитику →</button></div></div>}
-        {activeTab === "monitoring" && <DashboardPage onGlobalStatsUpdate={setGlobalStats} preferences={preferences} role={user?.role ?? "viewer"} displayMode={displayMode} />}
+        {activeTab === "monitoring" && <DashboardPage onGlobalStatsUpdate={setGlobalStats} preferences={preferences} role={user?.role ?? "viewer"} permissions={user?.permissions} displayMode={displayMode} />}
         {activeTab === "analytics" && <div className="space-y-6"><div className="page-heading"><p className="eyebrow">Отчёты и динамика</p><h2>Подробная аналитика</h2><p>Распределение событий, временная динамика и качество работы детектора.</p></div><StatsOverview stats={globalStats} detailed /></div>}
         {activeTab === "lab" && user?.role !== "viewer" && <LabPage />}
         {activeTab === "training" && user?.role === "admin" && <TrainingPage />}

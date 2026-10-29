@@ -38,6 +38,7 @@ interface ViolationsTableProps {
   onAcknowledge: (id: number) => void;
   onReview: (id: number, status: Violation["review_status"], comment: string) => void;
   onDelete: (id: number) => void;
+  onExport: () => void;
 }
 
 export const ViolationsTable: React.FC<ViolationsTableProps> = ({
@@ -57,12 +58,13 @@ export const ViolationsTable: React.FC<ViolationsTableProps> = ({
   onAcknowledge,
   onReview,
   onDelete,
+  onExport,
 }) => {
   return (
     <section className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-white">Журнал зафиксированных нарушений</h2>
+          <div className="flex items-center gap-3"><h2 className="text-lg font-semibold text-white">Журнал зафиксированных нарушений</h2><button type="button" className="journal-export-button" onClick={onExport}>Экспорт CSV</button></div>
           <p className="text-xs text-slate-400">
             Автоматическая фотофиксация и запись H.264 видеоклипа при каждом срабатывании YOLOv8
           </p>

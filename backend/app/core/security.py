@@ -44,7 +44,7 @@ def verify_api_key(
             if path in {"/api/auth/logout", "/api/preferences"}:
                 return
             permissions = principal.get("permissions", [])
-            permitted = (path == "/api/analyze/upload" and "analyze_files" in permissions) or (path.startswith("/api/violations/") and (path.endswith("/ack") or path.endswith("/review")) and "review_incidents" in permissions)
+            permitted = (path == "/api/analyze/upload" and "analyze_files" in permissions) or (path.startswith("/api/violations/") and (path.endswith("/ack") or path.endswith("/review")) and "review_incidents" in permissions) or (path.startswith("/api/cameras") and "manage_cameras" in permissions)
             if principal["role"] != "admin" and not permitted:
                 raise HTTPException(status_code=403, detail="Недостаточно прав для этого действия")
         return
@@ -60,8 +60,25 @@ def valid_session(token: str) -> bool:
 
 
 def require_admin(request: Request, _: None = Depends(verify_api_key)) -> None:
-    if request.state.principal["role"] != "admin":
+    principal = request.state.principal
+    path = request.url.path
+    permission_by_path = {
+        "/api/employees": "manage_employees",
+        "/api/roles": "manage_employees",
+        "/api/models": "manage_models",
+        "/api/system/diagnostics": "manage_models",
+    }
+    permission = next((value for prefix, value in permission_by_path.items() if path.startswith(prefix)), None)
+    if principal["role"] != "admin" and permission not in principal.get("permissions", []):
         raise HTTPException(status_code=403, detail="Требуются права администратора")
+
+
+def require_permission(permission: str):
+    def dependency(request: Request, _: None = Depends(verify_api_key)) -> None:
+        principal = request.state.principal
+        if principal["role"] != "admin" and permission not in principal.get("permissions", []):
+            raise HTTPException(status_code=403, detail="Недостаточно прав для этой операции")
+    return dependency
 
 
 def validate_stream_source(raw_url: str) -> str:

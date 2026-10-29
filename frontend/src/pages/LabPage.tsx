@@ -61,12 +61,12 @@ export const LabPage: React.FC = () => {
           />
         </label>
 
-        <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer select-none">
+        <label className="custom-check-row lab-save-toggle">
           <input
             type="checkbox"
             checked={saveViolation}
             onChange={(e) => setSaveViolation(e.target.checked)}
-            className="rounded accent-indigo-500"
+            className="custom-checkbox"
           />
           Автоматически регистрировать найденные угрозы в журнале нарушений
         </label>

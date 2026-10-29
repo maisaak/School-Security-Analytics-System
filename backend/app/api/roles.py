@@ -17,7 +17,7 @@ class RolePayload(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     name: str = Field(min_length=2, max_length=80)
     description: str = Field(default="", max_length=240)
-    permissions: list[str] = Field(default_factory=list, max_length=2)
+    permissions: list[str] = Field(default_factory=list, max_length=len(PERMISSIONS))
 
     @field_validator("permissions")
     @classmethod

@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.core.security import create_session, verify_api_key
-from app.core.accounts import check_password, hash_password, issue_session, token_hash
+from app.core.accounts import check_password, hash_password, issue_session, revoke_sessions, token_hash
 from app.db.models import AccessSession, Employee
 from app.db.session import SessionLocal
 
@@ -23,6 +23,11 @@ class Login(BaseModel):
     api_key: str | None = Field(default=None, min_length=1, max_length=512)
     username: str | None = Field(default=None, min_length=1, max_length=64)
     password: str | None = Field(default=None, min_length=1, max_length=256)
+
+
+class PasswordChange(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
 
 
 @router.post("/login")
@@ -73,3 +78,38 @@ def logout(response: Response, request: Request):
         db.commit()
     response.delete_cookie("school_session", path="/")
     return {"authenticated": False}
+
+
+@router.get("/sessions", dependencies=[Depends(verify_api_key)])
+def sessions(request: Request):
+    """Return safe metadata for the current employee's active sessions."""
+    with SessionLocal() as db:
+        rows = db.query(AccessSession).filter(AccessSession.employee_id == request.state.principal.get("id")).order_by(AccessSession.expires_at.desc()).all()
+        return [{"expires_at": row.expires_at, "current": row.token_hash == token_hash(request.cookies.get("school_session", ""))} for row in rows]
+
+
+@router.post("/sessions/revoke-all", dependencies=[Depends(verify_api_key)])
+def revoke_all_sessions(request: Request, response: Response):
+    employee_id = request.state.principal.get("id")
+    if employee_id is None:
+        raise HTTPException(status_code=422, detail="Для API-ключа нет пользовательских сессий")
+    with SessionLocal() as db:
+        revoke_sessions(db, employee_id)
+    response.delete_cookie("school_session", path="/")
+    return {"revoked": True}
+
+
+@router.post("/password", dependencies=[Depends(verify_api_key)])
+def change_password(payload: PasswordChange, request: Request, response: Response):
+    employee_id = request.state.principal.get("id")
+    if employee_id is None:
+        raise HTTPException(status_code=422, detail="Пароль API-ключа меняется в .env")
+    with SessionLocal() as db:
+        user = db.get(Employee, employee_id)
+        if not user or not check_password(payload.current_password, user.password_hash):
+            raise HTTPException(status_code=401, detail="Текущий пароль указан неверно")
+        user.password_hash = hash_password(payload.new_password)
+        revoke_sessions(db, employee_id)
+        db.commit()
+    response.delete_cookie("school_session", path="/")
+    return {"changed": True}

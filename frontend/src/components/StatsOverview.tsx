@@ -121,6 +121,10 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats, detailed = 
               ))}
             </div>
           </div>
+          <div className="lg:col-span-3 bg-slate-900/90 border border-slate-800 rounded-2xl p-4">
+            <div className="flex items-center justify-between mb-3"><span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Камеры и зоны риска</span><span className="text-xs text-slate-500">события за весь архив</span></div>
+            <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-2">{stats.by_camera.map(camera => <div key={camera.id} className="camera-report-card"><div className="flex items-center justify-between gap-2"><strong>{camera.name}</strong><span className={camera.online ? "text-emerald-300" : "text-amber-300"}>●</span></div><small>{camera.location}</small><div className="flex justify-between mt-2"><span>События <b>{camera.total}</b></span><span>Новые <b className="text-amber-300">{camera.unacknowledged}</b></span></div></div>)}</div>
+          </div>
         </div>
       )}
     </div>
