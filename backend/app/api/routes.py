@@ -211,7 +211,10 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
         start, end = now - timedelta(minutes=(i + 1) * 5), now - timedelta(minutes=i * 5)
         timeline.append({"label": end.astimezone().strftime("%H:%M"), "count": sum(start <= (v.detected_at.replace(tzinfo=timezone.utc) if v.detected_at.tzinfo is None else v.detected_at) < end for v in viols)})
     latencies = [stream_manager.get_telemetry(c.id)["latency_ms"] for c in cams if c.is_active]
-    return {"total_cameras": len(cams), "active_cameras": sum(stream_manager.get_telemetry(c.id)["online"] for c in cams), "total_violations": len(viols), "unacknowledged_violations": sum(not v.is_acknowledged for v in viols), "average_confidence": round(sum(v.confidence for v in viols) / len(viols), 4) if viols else 0, "by_type": by_type, "timeline": timeline, "model": {"active_weights": detector.active_weights_name, "reloaded_at": detector.reloaded_at, "avg_latency_ms": round(sum(latencies) / len(latencies), 1) if latencies else 0}}
+    confirmed = sum(v.review_status in {"confirmed", "closed"} or v.is_acknowledged for v in viols)
+    pending = sum(v.review_status in {"new", "in_review"} and not v.is_acknowledged for v in viols)
+    false_alarms = sum(v.review_status == "false_alarm" for v in viols)
+    return {"total_cameras": len(cams), "active_cameras": sum(stream_manager.get_telemetry(c.id)["online"] for c in cams), "total_violations": len(viols), "unacknowledged_violations": sum(not v.is_acknowledged for v in viols), "confirmed_violations": confirmed, "pending_violations": pending, "false_alarm_violations": false_alarms, "average_confidence": round(sum(v.confidence for v in viols) / len(viols), 4) if viols else 0, "by_type": by_type, "timeline": timeline, "model": {"active_weights": detector.active_weights_name, "reloaded_at": detector.reloaded_at, "avg_latency_ms": round(sum(latencies) / len(latencies), 1) if latencies else 0}}
 
 
 @router.get("/audit", dependencies=[Depends(require_admin)])

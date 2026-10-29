@@ -39,6 +39,9 @@ export interface DashboardStats {
   active_cameras: number;
   total_violations: number;
   unacknowledged_violations: number;
+  confirmed_violations: number;
+  pending_violations: number;
+  false_alarm_violations: number;
   average_confidence: number;
   by_type: Record<string, number>;
   timeline: Array<{ label: string; count: number }>;

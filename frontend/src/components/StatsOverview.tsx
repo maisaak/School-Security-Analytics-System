@@ -1,5 +1,5 @@
 import React from "react";
-import { AlertTriangle, Cpu, Shield, Video } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock } from "lucide-react";
 import { DashboardStats } from "../api/client";
 
 interface StatsOverviewProps {
@@ -9,41 +9,36 @@ interface StatsOverviewProps {
 
 export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats, detailed = false }) => {
   const totalThreats = Math.max(1, stats?.total_violations ?? 0);
-  const weaponCount = stats?.by_type?.weapon ?? 0;
-  const bagCount = stats?.by_type?.suspicious_bag ?? 0;
-  const dogCount = stats?.by_type?.dog ?? 0;
+  const confirmedCount = stats?.confirmed_violations ?? 0;
+  const pendingCount = stats?.pending_violations ?? 0;
 
   const cards = [
     {
-      title: "Активные потоки RTSP",
-      value: stats ? `${stats.active_cameras} / ${stats.total_cameras}` : "—",
-      sub: "Камеры на связи / всего",
-      icon: Video,
+      title: "Всего зафиксировано",
+      value: stats ? String(stats.total_violations) : "—",
+      sub: "Все события в архиве",
+      icon: AlertTriangle,
       accent: "text-emerald-400 bg-emerald-500/10 border-emerald-500/25",
     },
     {
-      title: "Зафиксировано событий",
-      value: stats ? String(stats.total_violations) : "—",
-      sub: stats
-        ? `Ожидают проверки: ${stats.unacknowledged_violations}`
-        : "Журнал событий",
-      icon: AlertTriangle,
+      title: "Подтверждено",
+      value: stats ? String(confirmedCount) : "—",
+      sub: "Обработаны оператором",
+      icon: CheckCircle2,
+      accent: "text-emerald-400 bg-emerald-500/10 border-emerald-500/25",
+    },
+    {
+      title: "Ждут обработки",
+      value: stats ? String(pendingCount) : "—",
+      sub: "Новые и на проверке",
+      icon: Clock,
       accent: "text-amber-400 bg-amber-500/10 border-amber-500/25",
     },
     {
-      title: "Ожидают проверки",
-      value: stats ? String(stats.unacknowledged_violations) : "—",
-      sub: "Требуют внимания оператора",
-      icon: Shield,
-      accent: "text-red-400 bg-red-500/10 border-red-500/25",
-    },
-    {
-      title: "Инференс YOLO",
-      value: stats ? `${stats.model.avg_latency_ms.toFixed(0)} мс` : "—",
-      sub: stats && stats.average_confidence > 0
-        ? `Средняя уверенность: ${(stats.average_confidence * 100).toFixed(1)}%`
-        : "Готов к анализу кадров",
-      icon: Cpu,
+      title: "Доля подтверждённых",
+      value: stats && stats.total_violations ? `${Math.round((confirmedCount / stats.total_violations) * 100)}%` : "—",
+      sub: "От всех зафиксированных событий",
+      icon: CheckCircle2,
       accent: "text-indigo-400 bg-indigo-500/10 border-indigo-500/25",
     },
   ];
@@ -81,9 +76,9 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats, detailed = 
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {[
-                { label: "Оружие (weapon)", count: weaponCount, bar: "bg-red-500" },
-                { label: "Бесхозные сумки", count: bagCount, bar: "bg-amber-500" },
-                { label: "Собаки на территории", count: dogCount, bar: "bg-orange-500" },
+                { label: "Подтверждено", count: confirmedCount, bar: "bg-emerald-500" },
+                { label: "Ждут обработки", count: pendingCount, bar: "bg-amber-500" },
+                { label: "Ложные тревоги", count: stats.false_alarm_violations ?? 0, bar: "bg-slate-500" },
               ].map((item) => (
                 <div key={item.label} className="bg-slate-950/70 rounded-xl p-3 border border-slate-800/80">
                   <div className="flex justify-between text-xs mb-2">
