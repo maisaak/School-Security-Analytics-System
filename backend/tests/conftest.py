@@ -14,6 +14,7 @@ os.environ.update(
     DATABASE_URL=f"sqlite:///{(TEST_ROOT / 'test.db').as_posix()}",
     MEDIA_ROOT=str(TEST_ROOT / "media"), API_KEY="test-key-" + "a" * 40,
     DEV_MODE="false", SEED_DEMO_CAMERAS="false",
+    BOOTSTRAP_ADMIN_PASSWORD="",
 )
 
 from app.core.config import settings

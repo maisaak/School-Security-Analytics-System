@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import SecretStr
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -22,6 +23,8 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
 
     API_KEY: str = ""
+    BOOTSTRAP_ADMIN_USERNAME: str = "admin"
+    BOOTSTRAP_ADMIN_PASSWORD: SecretStr = SecretStr("")
     DEV_MODE: bool = False
     SEED_DEMO_CAMERAS: bool = False
     COOKIE_SECURE: bool = False  # Enable behind HTTPS outside localhost.

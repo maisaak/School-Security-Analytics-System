@@ -47,6 +47,8 @@ def _seed_initial_state() -> None:
     db = SessionLocal()
     try:
         _ensure_compatibility_columns()
+        from app.core.bootstrap import bootstrap_admin
+        bootstrap_admin()
         saved_model = db.get(AppSetting, "base_model")
         from app.api import settings as settings_api
         from app.services.incident_recording import RecordingSettings
