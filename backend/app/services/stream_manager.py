@@ -7,7 +7,6 @@ import subprocess
 import threading
 import time
 import uuid
-from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 import cv2
@@ -22,6 +21,8 @@ from app.services.simulator import RealisticCCTVSimulator
 from app.services.event_policy import EventPolicy
 from app.services.video_capture import LatestFrameCapture
 from app.services.notifications import notify_incident
+from app.services.camera_rules import load_rules, is_active, filter_analysis
+from app.services.incident_recording import IncidentRecording, PendingClip, RecordingSettings, decode_clip
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +41,14 @@ def _resolve_ffmpeg_bin() -> str:
 FFMPEG_BIN = _resolve_ffmpeg_bin()
 
 
-def encode_h264_clip(frames: list[np.ndarray], output_path: Path, fps: float = 12.0) -> None:
+def encode_h264_clip(frames, output_path: Path, fps: float = 12.0) -> None:
     """Кодирует последовательность BGR-кадров в браузерно-совместимый H.264 MP4 (yuv420p + faststart)."""
-    if not frames:
+    frames = iter(frames)
+    first = next(frames, None)
+    if first is None:
         return
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    h, w = frames[0].shape[:2]
+    h, w = first.shape[:2]
     # H.264 требует чётные размеры кадра
     even_w = w - (w % 2)
     even_h = h - (h % 2)
@@ -56,8 +59,13 @@ def encode_h264_clip(frames: list[np.ndarray], output_path: Path, fps: float = 1
     if not writer.isOpened():
         raise RuntimeError("Не удалось открыть видеокодировщик")
     try:
+        writer.write(first[:even_h, :even_w])
         for frm in frames:
             writer.write(frm[:even_h, :even_w])
+    except Exception:
+        writer.release()
+        temp_path.unlink(missing_ok=True)
+        raise
     finally:
         writer.release()
     transcode_h264(temp_path, output_path)
@@ -93,11 +101,14 @@ class CameraWorker(threading.Thread):
     TARGET_FPS = 12.0
     DETECT_EVERY_N_FRAMES = 3
 
-    def __init__(self, camera_id: int, name: str, rtsp_url: str, phase_offset: float = 0.0) -> None:
+    def __init__(self, camera_id: int, name: str, rtsp_url: str, phase_offset: float = 0.0, target_fps: int = 12, jpeg_quality: int = 82, detect_every: int = 3) -> None:
         super().__init__(daemon=True)
         self.camera_id = camera_id
         self.name = name
         self.rtsp_url = rtsp_url
+        self.TARGET_FPS = target_fps
+        self.DETECT_EVERY_N_FRAMES = detect_every
+        self.jpeg_quality = jpeg_quality
 
         self.stop_event = threading.Event()
         self.paused = False
@@ -110,7 +121,7 @@ class CameraWorker(threading.Thread):
 
         self.latest_jpeg: bytes | None = None
         self.latest_seq: int = 0
-        self.frame_buffer: deque[np.ndarray] = deque(maxlen=54)  # ~4.5 секунды видеофрагмента
+        self.recording = IncidentRecording(RecordingSettings())
         self.last_analysis: dict = {"violations": [], "safe_objects": [], "person_count": 0, "latency_ms": 0.0}
         self.last_violation_ts: dict[str, float] = {}
 
@@ -120,6 +131,17 @@ class CameraWorker(threading.Thread):
         self.policy = EventPolicy(settings.UNATTENDED_MIN_SECONDS, settings.DETECTION_CONFIRMATIONS)
         self._saving = threading.BoundedSemaphore(1)
         self.capture: LatestFrameCapture | None = None
+        with SessionLocal() as db:
+            self.rules = load_rules(db, camera_id)
+        self.rules_lock = threading.RLock()
+
+    def update_rules(self, rules) -> None:
+        with self.rules_lock:
+            self.rules = rules
+            self.policy.reset()
+            self.last_analysis = {"violations": [], "safe_objects": [], "person_count": 0, "latency_ms": 0.0}
+            self.last_violation_ts.clear()
+            self.recording.configure(self.recording.settings)
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -140,7 +162,8 @@ class CameraWorker(threading.Thread):
         confidence: float,
         bbox: list[int],
         snapshot: np.ndarray,
-        clip_frames: list[np.ndarray],
+        clip: PendingClip,
+        detected_at: datetime,
     ) -> None:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
         img_rel = f"snapshots/cam{self.camera_id}_{v_type}_{stamp}.jpg"
@@ -155,7 +178,16 @@ class CameraWorker(threading.Thread):
                 return
             if not cv2.imwrite(str(img_abs), snapshot, [int(cv2.IMWRITE_JPEG_QUALITY), 88]):
                 raise RuntimeError("Не удалось сохранить снимок")
-            encode_h264_clip(clip_frames, vid_abs, fps=self.TARGET_FPS)
+            while not self.stop_event.is_set():
+                remaining = clip.end - time.monotonic()
+                if remaining <= 0:
+                    break
+                self.stop_event.wait(min(remaining, 0.25))
+            clip_frames = self.recording.finish(clip)
+            if self.stop_event.is_set():
+                img_abs.unlink(missing_ok=True)
+                return
+            encode_h264_clip(decode_clip(clip_frames, self.TARGET_FPS), vid_abs, fps=self.TARGET_FPS)
             if self.stop_event.is_set():
                 img_abs.unlink(missing_ok=True)
                 vid_abs.unlink(missing_ok=True)
@@ -167,6 +199,7 @@ class CameraWorker(threading.Thread):
                 bbox_json=json.dumps(bbox),
                 image_path=f"/media/{img_rel}",
                 video_path=f"/media/{vid_rel}",
+                detected_at=detected_at,
             )
             db.add(row)
             db.commit()
@@ -179,6 +212,7 @@ class CameraWorker(threading.Thread):
             img_abs.unlink(missing_ok=True)
             vid_abs.unlink(missing_ok=True)
         finally:
+            self.recording.finish(clip)
             db.close()
             self._saving.release()
 
@@ -288,30 +322,39 @@ class CameraWorker(threading.Thread):
             self.stop_event.wait(1)
 
     def _process_single_frame(self, raw_frame: np.ndarray, frame_idx: int) -> None:
+        with self.rules_lock:
+            self._process_ruled_frame(raw_frame, frame_idx)
+
+    def _process_ruled_frame(self, raw_frame: np.ndarray, frame_idx: int) -> None:
+        active = is_active(self.rules)
+        if not active:
+            self.policy.reset()
+            self.last_analysis = {"violations": [], "safe_objects": [], "person_count": 0, "latency_ms": 0.0}
         if frame_idx % self.DETECT_EVERY_N_FRAMES == 0:
-            self.last_analysis = self.policy.update(detector.detect_frame(raw_frame), time.monotonic())
+            if active:
+                analysis = filter_analysis(detector.detect_frame(raw_frame), self.rules, raw_frame.shape[1], raw_frame.shape[0])
+                self.last_analysis = self.policy.update(analysis, time.monotonic())
 
         annotated = detector.annotate_frame(raw_frame, self.last_analysis, camera_title=self.name)
-        self.frame_buffer.append(annotated)
 
-        ok, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+        ok, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality])
         if ok:
             self.latest_jpeg = buf.tobytes()
             self.latest_seq += 1
+        else:
+            return
 
         now = time.monotonic()
+        self.recording.append(now, self.latest_jpeg)
         for item in self.last_analysis.get("violations", []):
             v_type = item["type"]
             if now - self.last_violation_ts.get(v_type, -999.0) >= settings.VIOLATION_COOLDOWN_SEC and self._saving.acquire(blocking=False):
                 self.last_violation_ts[v_type] = now
                 snapshot_copy = annotated.copy()
-                clip_frames = list(self.frame_buffer)
-                # Если буфер ещё короткий (первые секунды старта), дублируем кадры до ~2 сек, чтобы плеер проигрывал плавно
-                while len(clip_frames) < 24:
-                    clip_frames.insert(0, snapshot_copy)
+                clip = self.recording.begin(now, self.latest_jpeg)
                 threading.Thread(
                     target=self._save_incident,
-                    args=(v_type, item["confidence"], item["bbox"], snapshot_copy, clip_frames),
+                    args=(v_type, item["confidence"], item["bbox"], snapshot_copy, clip, datetime.now(timezone.utc)),
                     daemon=True,
                 ).start()
 
@@ -320,8 +363,15 @@ class StreamManager:
     def __init__(self) -> None:
         self._workers: dict[int, CameraWorker] = {}
         self._lock = threading.Lock()
+        self.recording_settings = RecordingSettings()
 
-    def start_camera(self, camera_id: int, name: str, rtsp_url: str, is_active: bool = True) -> None:
+    def configure_recording(self, value: RecordingSettings) -> None:
+        with self._lock:
+            self.recording_settings = value
+            for worker in self._workers.values():
+                worker.recording.configure(value)
+
+    def start_camera(self, camera_id: int, name: str, rtsp_url: str, is_active: bool = True, target_fps: int = 12, jpeg_quality: int = 82, detect_every: int = 3) -> None:
         if rtsp_url == "lab://uploads":
             return
         with self._lock:
@@ -329,8 +379,9 @@ class StreamManager:
             if existing:
                 existing.stop()
             offset = (camera_id * 8.5) % 26.0
-            worker = CameraWorker(camera_id=camera_id, name=name, rtsp_url=rtsp_url, phase_offset=offset)
+            worker = CameraWorker(camera_id=camera_id, name=name, rtsp_url=rtsp_url, phase_offset=offset, target_fps=target_fps, jpeg_quality=jpeg_quality, detect_every=detect_every)
             worker.paused = not is_active
+            worker.recording.configure(self.recording_settings)
             self._workers[camera_id] = worker
             worker.start()
 
@@ -338,6 +389,14 @@ class StreamManager:
         worker = self._workers.get(camera_id)
         if worker:
             worker.paused = paused
+            if paused:
+                worker.update_rules(worker.rules)
+
+    def update_rules(self, camera_id: int, rules) -> None:
+        with self._lock:
+            worker = self._workers.get(camera_id)
+            if worker:
+                worker.update_rules(rules)
 
     def stop_camera(self, camera_id: int) -> None:
         with self._lock:

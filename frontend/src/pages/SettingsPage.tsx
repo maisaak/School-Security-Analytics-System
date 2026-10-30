@@ -3,9 +3,20 @@ import { api, AuditEntry, Diagnostics, Employee, ModelCatalog, Preferences, Role
 import { CustomSelect } from "../components/CustomSelect";
 import { ColorWheel } from "../components/ColorWheel";
 import { CustomMultiSelect } from "../components/CustomMultiSelect";
+import { QRCodeSVG } from "qrcode.react";
+import { ServerUpdates } from "../components/ServerUpdates";
+import { Bell, BrainCircuit, Monitor, Server, ShieldCheck, Users } from "lucide-react";
 
 interface Props { user: User; preferences: Preferences; onPreferences: (value: Preferences) => void; onPreview: (value: Preferences | null) => void }
 const input = "custom-input";
+const settingsSections = [
+  { id: "appearance", label: "Интерфейс", description: "Оформление и рабочее пространство", icon: Monitor, admin: false },
+  { id: "security", label: "Безопасность", description: "Пароль, устройства и двухфакторная защита", icon: ShieldCheck, admin: false },
+  { id: "people", label: "Сотрудники", description: "Учётные записи, роли и разрешения", icon: Users, admin: true },
+  { id: "models", label: "Детекция", description: "Модели и пороги распознавания", icon: BrainCircuit, admin: false },
+  { id: "notifications", label: "Уведомления", description: "Доставка тревог и интеграции", icon: Bell, admin: true },
+  { id: "system", label: "Сервер", description: "Обновления, диагностика и журнал действий", icon: Server, admin: true },
+];
 const roleName: Record<string, string> = { admin: "Администратор", operator: "Охрана", viewer: "Директор" };
 const permissionOptions = [
   { key: "view_monitoring", label: "Просмотр камер и мониторинга" },
@@ -19,6 +30,7 @@ const permissionOptions = [
 ];
 
 export function SettingsPage({ user, preferences, onPreferences, onPreview }: Props) {
+  const [section, setSection] = useState("appearance");
   const [draft, setDraft] = useState(preferences);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -38,6 +50,23 @@ export function SettingsPage({ user, preferences, onPreferences, onPreview }: Pr
   const [sessions, setSessions] = useState<Array<{ expires_at: string; current: boolean }>>([]);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPasswordValue, setNewPasswordValue] = useState("");
+  const [twoFactor, setTwoFactor] = useState<{ enabled: boolean; available: boolean }>({ enabled: false, available: false });
+  const [twoFactorSecret, setTwoFactorSecret] = useState<string | null>(null);
+  const [twoFactorUri, setTwoFactorUri] = useState<string | null>(null);
+  const [twoFactorCode, setTwoFactorCode] = useState("");
+  const [twoFactorPassword, setTwoFactorPassword] = useState("");
+  const [thresholds, setThresholds] = useState({ confidence: 0.42, weapon_confidence: 0.5, custom_confidence: 0.52 });
+  const [recording, setRecording] = useState<{ before_seconds: number; after_seconds: number } | null>(null);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
+  const [recordingBusy, setRecordingBusy] = useState(false);
+  const [recordingMessage, setRecordingMessage] = useState<string | null>(null);
+
+  async function loadRecording() {
+    setRecordingBusy(true); setRecordingError(null);
+    try { setRecording(await api.getRecordingSettings()); }
+    catch (e) { setRecordingError(e instanceof Error ? e.message : "Не удалось загрузить настройки записи"); }
+    finally { setRecordingBusy(false); }
+  }
 
   useEffect(() => { onPreview(draft); }, [draft, onPreview]);
   useEffect(() => () => onPreview(null), [onPreview]);
@@ -52,6 +81,9 @@ export function SettingsPage({ user, preferences, onPreferences, onPreview }: Pr
     if (user.role === "admin") api.getAudit(100).then(setAudit).catch(e => setError(e.message));
     if (user.role === "admin") api.getDiagnostics().then(setDiagnostics).catch(e => setError(e.message));
     api.getSessions().then(setSessions).catch(e => setError(e.message));
+    api.twoFactorStatus().then(setTwoFactor).catch(e => setError(e.message));
+    if (user.role === "admin") api.getThresholds().then(setThresholds).catch(e => setError(e.message));
+    if (user.role === "admin") void loadRecording();
   }, [user.role]);
 
   async function run(action: () => Promise<void>) {
@@ -69,16 +101,41 @@ export function SettingsPage({ user, preferences, onPreferences, onPreview }: Pr
     ? [...baseRoleOptions, { value: newUser.role, label: "Текущая роль", hint: "Роль не найдена в загруженном списке" }]
     : baseRoleOptions;
 
-  return <div className="space-y-6">
-    <h2 className="text-xl font-semibold">Настройки · {user.display_name} ({roleName[user.role]})</h2>
+  return <div className="settings-page space-y-6">
+    <div className="page-heading"><h2>Всё на своих местах</h2><p>Ваше рабочее пространство, доступ и состояние системы.</p></div>
+    <div className="settings-layout">
+    <nav className="settings-navigation" aria-label="Разделы настроек">{settingsSections.filter(item => !item.admin || user.role === "admin").map(({ id, label, icon: Icon }) => <button type="button" key={id} aria-current={section === id ? "page" : undefined} onClick={() => setSection(id)}><Icon aria-hidden="true" size={18} />{label}</button>)}<div className="settings-identity"><strong>{user.display_name}</strong><span>{user.role_name ?? roleName[user.role] ?? "Пользовательская роль"}</span></div></nav>
+    <div className="settings-content space-y-5">
+    <div className="settings-section-heading"><h3>{settingsSections.find(item => item.id === section)?.label}</h3><p>{settingsSections.find(item => item.id === section)?.description}</p></div>
+    {user.role === "admin" && section === "system" && <ServerUpdates />}
     {error && <p role="alert" className="bg-red-950 text-red-200 p-3 rounded-xl">{error}</p>}
     {message && <p role="status" className="bg-emerald-950 text-emerald-200 p-3 rounded-xl">{message}</p>}
-    {user.role === "admin" && <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+    {user.role === "admin" && section === "models" && <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+      <div className="settings-panel-title">Запись нарушения</div>
+      <p className="text-xs text-slate-400">Общая длительность видеофрагментов для всех камер. Применяется к новым срабатываниям; старые записи и уже начатые фрагменты не меняются.</p>
+      {recordingError && <div role="alert"><p>{recordingError}</p><button type="button" disabled={recordingBusy} onClick={() => void loadRecording()}>Повторить загрузку настроек записи</button></div>}
+      {!recording && !recordingError && <p role="status">Загрузка настроек записи…</p>}
+      {recording && <form className="space-y-4" onSubmit={async event => {
+        event.preventDefault(); if (recordingBusy) return;
+        setRecordingBusy(true); setRecordingError(null); setRecordingMessage(null);
+        try { setRecording(await api.setRecordingSettings(recording)); setRecordingMessage("Длительность записи сохранена и применена к камерам"); }
+        catch (e) { setRecordingError(e instanceof Error ? e.message : "Не удалось сохранить настройки записи"); }
+        finally { setRecordingBusy(false); }
+      }}>
+        <fieldset disabled={recordingBusy} className="grid md:grid-cols-2 gap-3">
+          {([ ["before_seconds", "До нарушения, секунд"], ["after_seconds", "После нарушения, секунд"] ] as const).map(([key, label]) => <label className="block text-sm" key={key}>{label}<input className={input} required type="number" min={0} max={30} step={1} value={Number.isFinite(recording[key]) ? recording[key] : ""} onChange={event => { setRecording({ ...recording, [key]: event.target.value === "" ? NaN : Number(event.target.value) }); setRecordingMessage(null); }} /></label>)}
+        </fieldset>
+        <p className="text-xs text-slate-400">От 0 до 30 секунд с каждой стороны. Перед записью нужен прогрев буфера; при запуске, потере связи или достижении лимита памяти фрагмент может быть короче. Видео появляется в архиве после записи и кодирования. Одновременно сохраняется один фрагмент на камеру.</p>
+        <button disabled={recordingBusy || !Number.isInteger(recording.before_seconds) || !Number.isInteger(recording.after_seconds)} className="accent-button rounded-lg px-4 py-2">{recordingBusy ? "Сохранение…" : "Сохранить длительность записи"}</button>
+      </form>}
+      {recordingMessage && <p role="status">{recordingMessage}</p>}
+    </section>}
+    {user.role === "admin" && <section hidden={section !== "notifications"} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
       <div className="settings-panel-title">Уведомления о тревогах</div>
       <p className="text-xs text-slate-400">Telegram и webhook настраиваются администратором на сервере в файле `.env`. При срабатывании система отправляет тип угрозы, камеру и уверенность детектора.</p>
       <div className="notification-hints"><span>Telegram: <b>TELEGRAM_BOT_TOKEN</b> + <b>TELEGRAM_CHAT_ID</b></span><span>Webhook: <b>NOTIFICATION_WEBHOOK_URL</b></span><span>Ограничение повторов: <b>NOTIFICATION_COOLDOWN_SEC</b></span></div>
     </section>}
-    <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+    <section hidden={section !== "security"} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
       <div className="settings-panel-title">Профиль и безопасность</div>
       <p className="text-xs text-slate-400">{user.display_name} · {user.role_name ?? roleName[user.role] ?? "Пользовательская роль"}. Смена пароля завершит все активные сессии.</p>
       <form className="profile-password-form" onSubmit={event => { event.preventDefault(); run(async () => { await api.changePassword(currentPassword, newPasswordValue); setCurrentPassword(""); setNewPasswordValue(""); setMessage("Пароль изменён. Войдите снова с новым паролем."); }); }}>
@@ -88,11 +145,21 @@ export function SettingsPage({ user, preferences, onPreferences, onPreview }: Pr
       </form>
       <div className="session-list"><div className="flex items-center justify-between gap-3"><strong className="text-sm">Активные сессии: {sessions.length}</strong><button className="border border-slate-700 rounded-lg px-3 py-2 text-xs" onClick={() => run(async () => { await api.revokeAllSessions(); setSessions([]); setMessage("Все сессии завершены"); })}>Выйти со всех устройств</button></div>{sessions.map((session, index) => <div className="session-row" key={`${session.expires_at}-${index}`}><span>{session.current ? "Текущая сессия" : "Другое устройство"}</span><small>до {new Date(session.expires_at).toLocaleString("ru-RU")}</small></div>)}</div>
     </section>
-    <fieldset disabled={busy} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+    <section hidden={section !== "security"} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+      <div className="settings-panel-title">Двухфакторная защита</div>
+      <p className="text-xs text-slate-400">Используйте Google Authenticator, Authy или другое приложение TOTP. Код проверяется на сервере с допуском одного временного шага.</p>
+      {twoFactor.available && <label className="block text-sm">Текущий пароль для изменения 2FA<input className={input} type="password" autoComplete="current-password" value={twoFactorPassword} onChange={event => setTwoFactorPassword(event.target.value)} /></label>}
+      {twoFactor.enabled && <label className="block text-sm">Новый код из приложения<input className={`${input} two-factor-code`} autoComplete="one-time-code" inputMode="numeric" maxLength={6} value={twoFactorCode} onChange={event => setTwoFactorCode(event.target.value.replace(/\D/g, ""))} /><span className="text-xs text-slate-400">Если этот код уже использован при входе, дождитесь следующего.</span></label>}
+      <div className="flex flex-wrap items-center gap-3"><span className={twoFactor.enabled ? "text-emerald-300" : "text-amber-300"}>{twoFactor.enabled ? "2FA включена" : "2FA выключена"}</span>{!twoFactor.enabled ? <button disabled={busy || !twoFactor.available || !twoFactorPassword} className="accent-button rounded-lg px-4 py-2" onClick={() => run(async () => { const value = await api.twoFactorSetup(twoFactorPassword); setTwoFactorPassword(""); setTwoFactorSecret(value.secret); setTwoFactorUri(value.otpauth_url); setTwoFactorCode(""); setMessage("Отсканируйте QR-код и подтвердите кодом в течение 10 минут."); })}>Подключить 2FA</button> : <button disabled={busy || !twoFactorPassword || twoFactorCode.length !== 6} className="border border-red-500/40 text-red-300 rounded-lg px-4 py-2" onClick={() => run(async () => { const value = await api.twoFactorDisable(twoFactorPassword, twoFactorCode); setTwoFactorPassword(""); setTwoFactorCode(""); setTwoFactorSecret(null); setTwoFactorUri(null); setTwoFactor(current => ({ ...current, ...value })); setMessage("2FA отключена. Другие сессии завершены."); })}>Отключить 2FA</button>}</div>
+      {twoFactorUri && !twoFactor.enabled && <div className="flex flex-wrap items-center gap-5"><div className="bg-white p-4 rounded-xl"><QRCodeSVG value={twoFactorUri} size={200} level="M" marginSize={4} title="QR-код подключения двухфакторной защиты" /></div><div className="max-w-sm space-y-2 text-sm text-slate-400"><p>Откройте приложение-аутентификатор → добавьте аккаунт → отсканируйте QR-код.</p><p>Введите код из приложения ниже, чтобы завершить подключение.</p><p className="text-xs">Не передавайте QR-код и секретный ключ другим людям. Код генерируется локально, без сторонних сервисов.</p></div></div>}
+      {twoFactorSecret && !twoFactor.enabled && <div className="two-factor-panel"><div><span className="two-factor-label">Ключ для ручного подключения</span><code className="two-factor-secret">{twoFactorSecret.match(/.{1,4}/g)?.join(" ")}</code></div><div className="two-factor-confirm"><label className="two-factor-code-label"><span className="two-factor-label">Код из приложения</span><input className={`${input} two-factor-code`} aria-label="Код подтверждения двухфакторной защиты" autoComplete="one-time-code" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} placeholder="000000" value={twoFactorCode} onChange={e => setTwoFactorCode(e.target.value.replace(/\D/g, ""))} /></label><button disabled={busy || twoFactorCode.length !== 6} className="accent-button rounded-lg px-4 py-2" onClick={() => run(async () => { const value = await api.twoFactorEnable(twoFactorCode); setTwoFactor(current => ({ ...current, ...value })); setTwoFactorSecret(null); setTwoFactorUri(null); setTwoFactorCode(""); setMessage("2FA включена"); })}>Подтвердить</button></div></div>}
+    </section>
+    {user.role === "admin" && section === "models" && <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4"><div className="settings-panel-title">Пороги детекции</div><p className="text-xs text-slate-400">Изменения применяются к новым кадрам и сохраняются в базе.</p><div className="grid md:grid-cols-3 gap-3">{([ ["confidence", "Общий"], ["weapon_confidence", "Оружие"], ["custom_confidence", "Кастомная модель"] ] as const).map(([key, label]) => <label className="text-sm" key={key}>{label}: {Math.round(thresholds[key] * 100)}%<input className="modern-range" type="range" min="0.05" max="0.99" step="0.01" value={thresholds[key]} onChange={e => setThresholds({ ...thresholds, [key]: Number(e.target.value) })} /></label>)}</div><button className="accent-button rounded-lg px-4 py-2" onClick={() => run(async () => { await api.setThresholds(thresholds); setMessage("Пороги детекции сохранены"); })}>Сохранить пороги</button></section>}
+    <fieldset hidden={section !== "appearance"} disabled={busy} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
       <div className="settings-panel-title">Мой интерфейс</div>
       <p className="text-xs text-slate-400">Сохраняется на сервере отдельно для каждой учётной записи. Скрытие блока не меняет права доступа.</p>
-      <label className="block text-sm">Колонок видеостены
-        <CustomSelect value={draft.columns} onChange={value => setDraft({ ...draft, columns: value as Preferences["columns"] })} options={[1,2,3,4].map(n => ({ value: n as Preferences["columns"], label: `${n} колон${n === 1 ? "ка" : "ки"}` }))} />
+       <label className="block text-sm">Максимум камер в строке видеостены
+         <CustomSelect value={draft.columns} onChange={value => setDraft({ ...draft, columns: value as Preferences["columns"] })} options={[3,4,5,6,7,8].map(n => ({ value: n as Preferences["columns"], label: `${n === 3 ? 4 : n} камер в строке` }))} />
       </label>
       <label className="block text-sm">Стартовая страница
         <CustomSelect value={draft.default_tab} onChange={value => setDraft({ ...draft, default_tab: value as Preferences["default_tab"] })} options={[{ value: "dashboard", label: "Обзор" }, { value: "monitoring", label: "Мониторинг" }, { value: "analytics", label: "Аналитика" }, ...(user.role !== "viewer" ? [{ value: "lab", label: "Лаборатория" }] : []), ...(user.role === "admin" ? [{ value: "training", label: "Обучение" }] : []), { value: "settings", label: "Настройки" }]} />
@@ -111,7 +178,7 @@ export function SettingsPage({ user, preferences, onPreferences, onPreview }: Pr
       <button className="bg-indigo-600 rounded-lg px-4 py-2" onClick={() => run(async () => { const saved = await api.setPreferences(draft); onPreferences(saved); setMessage("Настройки интерфейса сохранены"); })}>Сохранить интерфейс</button>
     </fieldset>
 
-    <fieldset disabled={busy || user.role !== "admin"} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+    <fieldset hidden={section !== "models"} disabled={busy || user.role !== "admin"} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
       <div className="settings-panel-title">Версия YOLO</div>
       <p className="text-sm">Базовая: <strong>{catalog?.active_base ?? "…"}</strong> · Кастомная: {catalog?.custom_weights ?? "не активирована"}</p>
       <p className="text-xs text-slate-400">Выбор общий для всех камер. YOLOv8 и YOLO11: N — быстрее и легче, X — тяжелее. Специализированный детектор оружия и кастомные веса остаются отдельными. Обучение новых кандидатов использует выбранную базу.</p>
@@ -120,7 +187,7 @@ export function SettingsPage({ user, preferences, onPreferences, onPreview }: Pr
       <button className="bg-indigo-600 rounded-lg px-4 py-2" onClick={() => run(async () => { setCatalog(await api.selectModel(model, download)); setMessage("Модель проверена и применена"); })}>{busy ? "Выполняется…" : "Применить модель"}</button>
     </fieldset>
 
-    {user.role === "admin" && <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+    {user.role === "admin" && <section hidden={section !== "people"} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
        <h3 className="text-lg font-semibold">Доступ сотрудников</h3>
        <p className="text-xs text-slate-400">Директор: просмотр камер, архива и аналитики. Охрана: просмотр, проверка файлов и обработка инцидентов. Администратор: камеры, модели, обучение и сотрудники. Отключение, смена роли или пароля отзывает все сессии сотрудника.</p>
        {error?.startsWith("Не удалось загрузить роли") && <div className="settings-inline-warning"><span>Список ролей временно недоступен. Используются базовые роли.</span><button type="button" onClick={() => { setError(null); setRolesLoading(true); api.getRoles().then(setRoles).catch(e => setError(`Не удалось загрузить роли: ${e.message}`)).finally(() => setRolesLoading(false)); }}>Повторить</button></div>}
@@ -153,7 +220,7 @@ export function SettingsPage({ user, preferences, onPreferences, onPreview }: Pr
       </div>
     </section>}
 
-    {user.role === "admin" && <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+    {user.role === "admin" && <section hidden={section !== "system"} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div><h3 className="text-lg font-semibold">Журнал действий</h3><p className="text-xs text-slate-400">Последние изменения, подтверждения и операции администраторов.</p></div>
         <button className="border border-slate-700 rounded-lg px-3 py-2 text-sm" onClick={() => run(async () => setAudit(await api.getAudit(100)))}>Обновить</button>
@@ -164,9 +231,10 @@ export function SettingsPage({ user, preferences, onPreferences, onPreview }: Pr
       </tbody></table></div>
     </section>}
 
-    {user.role === "admin" && <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+    {user.role === "admin" && <section hidden={section !== "system"} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-semibold">Диагностика системы</h3><p className="text-xs text-slate-400">Состояние камер, диска, модели и обучения.</p></div><button className="border border-slate-700 rounded-lg px-3 py-2 text-sm" onClick={() => run(async () => setDiagnostics(await api.getDiagnostics()))}>Обновить</button></div>
       {diagnostics && <><div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm"><div className="rounded-xl bg-slate-950 p-3">API: <strong className="text-emerald-300">{diagnostics.api}</strong></div><div className="rounded-xl bg-slate-950 p-3">БД: <strong className="text-emerald-300">{diagnostics.database}</strong></div><div className="rounded-xl bg-slate-950 p-3">Свободно: <strong>{diagnostics.disk.free_percent}%</strong></div><div className="rounded-xl bg-slate-950 p-3">Обучение: <strong>{diagnostics.training.running_jobs ? "идёт" : "свободно"}</strong></div></div><p className="text-xs text-slate-400">Базовая модель: {diagnostics.model.base} · Активная: {diagnostics.model.active} · Файл: {diagnostics.model.path_exists ? "найден" : "не найден"}</p><div className="space-y-2">{diagnostics.cameras.map(camera => <div key={camera.id} className="flex flex-wrap gap-3 items-center border-t border-slate-800 pt-2 text-sm"><span className={camera.online ? "text-emerald-300" : "text-red-300"}>●</span><span className="flex-1">{camera.name}</span><span>{camera.online ? `${camera.fps.toFixed(1)} FPS · ${camera.latency_ms.toFixed(0)} мс` : camera.last_error ?? "Нет связи"}</span></div>)}</div></>}
     </section>}
+    </div></div>
   </div>;
 }

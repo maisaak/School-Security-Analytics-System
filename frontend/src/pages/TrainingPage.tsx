@@ -91,6 +91,7 @@ export const TrainingPage: React.FC = () => {
                 <span className="training-slider-value">{epochs} эпох</span>
               </div>
               <input
+                aria-label="Количество эпох обучения"
                 type="range"
                 min={2}
                 max={25}

@@ -41,7 +41,7 @@ def verify_api_key(
         request.state.principal = principal
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             path = request.url.path.rstrip("/")
-            if path in {"/api/auth/logout", "/api/preferences"}:
+            if path in {"/api/auth/logout", "/api/preferences", "/api/auth/password", "/api/auth/sessions/revoke-all", "/api/auth/2fa/setup", "/api/auth/2fa/enable", "/api/auth/2fa/disable"}:
                 return
             permissions = principal.get("permissions", [])
             permitted = (path == "/api/analyze/upload" and "analyze_files" in permissions) or (path.startswith("/api/violations/") and (path.endswith("/ack") or path.endswith("/review")) and "review_incidents" in permissions) or (path.startswith("/api/cameras") and "manage_cameras" in permissions)
@@ -87,6 +87,8 @@ def validate_stream_source(raw_url: str) -> str:
     во внутренние сервисы Docker / облачные метаданные (169.254.169.254, 127.0.0.1 и т.д.).
     """
     url = raw_url.strip()
+    if url == "demo://school-entrance":
+        return "sim://entrance"
     if url in ALLOWED_SIM_SOURCES or url.startswith("sim://"):
         sim_name = url.removeprefix("sim://").strip("/")
         if sim_name not in {"entrance", "hallway", "courtyard"}:

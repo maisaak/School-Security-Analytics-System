@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
 
 export interface SelectOption<T extends string | number> {
@@ -26,7 +26,17 @@ export function CustomSelect<T extends string | number>({
 }: CustomSelectProps<T>) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const id = useId();
+  const expanded = open && !disabled;
   const selected = options.find((option) => option.value === value) ?? options[0];
+  const focusOption = (index: number) => {
+    const items = root.current?.querySelectorAll<HTMLButtonElement>('[role="option"]');
+    if (items?.length) items[Math.max(0, Math.min(index, items.length - 1))].focus();
+  };
+  useEffect(() => {
+    if (expanded) focusOption(Math.max(0, options.findIndex(option => option.value === value)));
+  }, [expanded]);
 
   useEffect(() => {
     const close = (event: PointerEvent) => {
@@ -37,13 +47,26 @@ export function CustomSelect<T extends string | number>({
   }, []);
 
   return (
-    <div ref={root} className={`custom-select ${open ? "is-open" : ""} ${className}`}>
+    <div ref={root} className={`custom-select ${expanded ? "is-open" : ""} ${className}`} onBlur={event => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
+    }} onKeyDown={event => {
+      if (event.key === "Escape" && expanded) { event.preventDefault(); event.stopPropagation(); setOpen(false); trigger.current?.focus(); }
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        if (!expanded) { setOpen(true); return; }
+        const items = Array.from(root.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? []);
+        const current = items.indexOf(document.activeElement as HTMLButtonElement);
+        focusOption(event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : current + (event.key === "ArrowDown" ? 1 : -1));
+      }
+    }}>
       <button
+        ref={trigger}
         type="button"
         className="custom-select-trigger"
         aria-label={ariaLabel}
         aria-haspopup="listbox"
-        aria-expanded={open}
+        aria-expanded={expanded}
+        aria-controls={expanded ? id : undefined}
         disabled={disabled}
         onClick={() => setOpen((current) => !current)}
       >
@@ -53,20 +76,22 @@ export function CustomSelect<T extends string | number>({
         </span>
         <ChevronDown className="custom-select-chevron" aria-hidden="true" />
       </button>
-      {open && (
-        <div className="custom-select-menu" role="listbox" aria-label={ariaLabel}>
+      {expanded && (
+        <div id={id} className="custom-select-menu" role="listbox" aria-label={ariaLabel}>
           {options.map((option) => {
             const active = option.value === value;
             return (
               <button
                 type="button"
                 role="option"
-                aria-selected={active}
+                 aria-selected={active}
+                 tabIndex={-1}
                 key={String(option.value)}
                 className={`custom-select-option ${active ? "is-selected" : ""}`}
                 onClick={() => {
                   onChange(option.value);
-                  setOpen(false);
+                   setOpen(false);
+                   trigger.current?.focus();
                 }}
               >
                 <span>

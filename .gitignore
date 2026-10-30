@@ -38,3 +38,5 @@ ml/models/active.pt
 .backend.pid
 .frontend.pid
 backups/
+
+.slim/deepwork/

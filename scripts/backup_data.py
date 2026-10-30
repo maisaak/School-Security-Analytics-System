@@ -4,18 +4,54 @@ from __future__ import annotations
 import argparse
 import shutil
 import sqlite3
+import hashlib
+import json
 from datetime import datetime
 from pathlib import Path
 
 
+DATA_FOLDERS = ("media", "ml/datasets/custom", "ml/models/candidates")
+
+
+def is_link(path: Path) -> bool:
+    return path.is_symlink() or getattr(path, "is_junction", lambda: False)()
+
+
+def file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def safe_files(root: Path):
+    for path in root.rglob("*"):
+        if is_link(path):
+            raise ValueError("Ссылки и junction не допускаются в резервной копии")
+        if path.is_file():
+            yield path
+
+
 def create_backup(root: Path, output: Path) -> Path:
     root, output = root.resolve(), output.resolve()
-    sources = ("media", "ml/datasets/custom", "ml/models/candidates")
+    sources = DATA_FOLDERS
     if any(output == root / name or root / name in output.parents for name in sources):
         raise ValueError("Папка резервных копий не должна находиться внутри копируемых данных")
+    database = root / "school_security.db"
+    if not database.is_file() or database.is_symlink():
+        raise ValueError("Стандартная SQLite-база не найдена. Копия не создана; для другой БД используйте её штатные средства.")
+    for name in sources:
+        source = root / name
+        if is_link(source):
+            raise ValueError("Исходные каталоги не должны быть ссылками")
+        if source.is_dir():
+            # Refuse links before copytree follows them, including links to secrets.
+            for _ in safe_files(source):
+                pass
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     target = output / f"school_security_{stamp}"
-    target.mkdir(parents=True, exist_ok=False)
+    target.mkdir(parents=True, exist_ok=False, mode=0o700)
     try:
         database = root / "school_security.db"
         if database.is_file():
@@ -28,7 +64,14 @@ def create_backup(root: Path, output: Path) -> Path:
         for name in sources:
             source = root / name
             if source.is_dir():
-                shutil.copytree(source, target / name)
+                def copy_file(src, dst):
+                    path = Path(src)
+                    if is_link(path):
+                        raise ValueError("Исходный файл заменён ссылкой")
+                    return shutil.copy2(src, dst)
+                shutil.copytree(source, target / name, copy_function=copy_file, symlinks=True)
+        files = [{"path": path.relative_to(target).as_posix(), "size": path.stat().st_size, "sha256": file_digest(path)} for path in sorted(safe_files(target))]
+        (target / "manifest.json").write_text(json.dumps({"version": 1, "created_at": datetime.now().isoformat(), "files": files}, ensure_ascii=False, indent=2), encoding="utf-8")
         (target / "BACKUP_COMPLETE.txt").write_text(
             "Резервная копия завершена. База SQLite проверена.\n"
             "Медиа и модели копируются последовательно; для согласованного снимка всех файлов остановите запись и обучение.\n"

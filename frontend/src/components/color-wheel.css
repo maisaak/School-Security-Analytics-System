@@ -1,0 +1,16 @@
+.color-wheel-picker { flex-wrap: wrap; padding: 24px; gap: 28px; }
+.color-wheel-picker .interactive-wheel { width: 220px; height: 220px; border: 1px solid var(--workspace-line); }
+.color-wheel-picker .wheel-preview { inset: 32px; border: 10px solid var(--workspace-field); box-shadow: inset 0 0 0 1px #ffffff30; }
+.color-wheel-picker .wheel-marker { width: 22px; height: 22px; transform: translate(-50%, -50%); border: 3px solid white; box-shadow: 0 0 0 2px #172033, 0 3px 8px #0007; }
+.color-wheel-picker .wheel-controls { min-width: min(100%, 220px); gap: 14px; }
+.accent-summary { display: flex; gap: 12px; align-items: center; }
+.accent-summary > span { width: 40px; height: 40px; border-radius: var(--control-radius); border: 1px solid var(--workspace-line); }
+.accent-summary strong, .accent-summary small { display: block; }
+.accent-summary small { color: var(--workspace-muted); font-size: 12px; }
+.accent-hue-range { --range-track: linear-gradient(to right, red, #ff0, #0f0, #0ff, #00f, #f0f, red); }
+.app-shell .color-wheel-picker .modern-range { background: var(--range-track, linear-gradient(to right, var(--workspace-line), rgb(var(--accent)))); }
+.app-shell .color-wheel-picker .modern-range::-moz-range-track { background: var(--range-track, var(--workspace-line)); }
+.accent-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.accent-presets button { width: 36px; height: 36px; border-radius: 50%; border: 5px solid var(--workspace-field); box-shadow: 0 0 0 1px var(--workspace-line); }
+.accent-presets button[aria-pressed=true], .accent-presets button:focus-visible { outline: 2px solid var(--workspace-text); outline-offset: 2px; }
+@media (max-width: 600px) { .color-wheel-picker { padding: 18px; } .color-wheel-picker .interactive-wheel { margin-inline: auto; } .color-wheel-picker .wheel-controls { width: 100%; max-width: none; } }

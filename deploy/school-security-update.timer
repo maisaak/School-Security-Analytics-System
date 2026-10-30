@@ -1,0 +1,10 @@
+[Unit]
+Description=Process School Security update requests every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+Unit=school-security-update.service
+
+[Install]
+WantedBy=timers.target

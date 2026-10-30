@@ -11,6 +11,14 @@ from app.core.config import PROJECT_ROOT
 from ml.datasets.generate_dataset import extract_foreground_rgba, paste_sprite
 
 
+def _read_image(path: Path):
+    """OpenCV filename APIs do not support all Windows Unicode paths."""
+    try:
+        return cv2.imdecode(np.frombuffer(path.read_bytes(), dtype=np.uint8), cv2.IMREAD_COLOR)
+    except OSError:
+        return None
+
+
 class RealisticCCTVSimulator:
     """
     Генерирует фотореалистичные чистые (без предразметки!) видеопотоки школьных камер:
@@ -36,7 +44,7 @@ class RealisticCCTVSimulator:
                 ("hallway", "hallway_cctv.jpg"),
                 ("courtyard", "courtyard_cctv.jpg"),
             ):
-                img = cv2.imread(str(assets_dir / "scenes" / fname))
+                img = _read_image(assets_dir / "scenes" / fname)
                 if img is None:
                     img = np.full((540, 960, 3), 48, dtype=np.uint8)
                 else:
@@ -44,10 +52,10 @@ class RealisticCCTVSimulator:
                 scenes[key] = img
 
             sprites = {
-                "person": extract_foreground_rgba(cv2.imread(str(assets_dir / "sprites" / "student_white.png"))),
-                "bag": extract_foreground_rgba(cv2.imread(str(assets_dir / "sprites" / "backpack_white.png"))),
-                "dog": extract_foreground_rgba(cv2.imread(str(assets_dir / "sprites" / "dog_white.png"))),
-                "weapon": extract_foreground_rgba(cv2.imread(str(assets_dir / "sprites" / "weapon_white.jpg"))),
+                "person": extract_foreground_rgba(_read_image(assets_dir / "sprites" / "student_white.png")),
+                "bag": extract_foreground_rgba(_read_image(assets_dir / "sprites" / "backpack_white.png")),
+                "dog": extract_foreground_rgba(_read_image(assets_dir / "sprites" / "dog_white.png")),
+                "weapon": extract_foreground_rgba(_read_image(assets_dir / "sprites" / "weapon_white.jpg")),
             }
             cls._assets_cache = {"scenes": scenes, "sprites": sprites}
             return cls._assets_cache

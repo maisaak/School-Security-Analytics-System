@@ -1,10 +1,23 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Play, Plus, RefreshCw, X } from "lucide-react";
+import { AlertTriangle, Camera as CameraIcon, Play, Plus, RefreshCw, Search, X } from "lucide-react";
 import { api, Camera, DashboardStats, Preferences, User, Violation } from "../api/client";
 import { CameraCard } from "../components/CameraCard";
 import { AddCameraModal } from "../components/AddCameraModal";
-import { VIOLATION_META, ViolationsTable } from "../components/ViolationsTable";
+import { VIOLATION_META } from "../components/ViolationsTable";
 import { VideoModal } from "../components/VideoModal";
+import { CameraViewer } from "../components/CameraViewer";
+import { CameraSettingsDialog } from "../components/CameraSettingsDialog";
+import { ArchiveBrowser } from "../components/ArchiveBrowser";
+import { FloorPlans } from "../components/FloorPlans";
+import "../operations.css";
+import { CameraFilter, filterCameras, matchesCameraFilter } from "../utils/cameraFilters";
+import { canLeaveWorkspace } from "../utils/navigationGuard";
+import { readMonitoringState } from "../utils/monitoringState";
+
+const cameraFilters: Array<{ id: CameraFilter; label: string }> = [
+  { id: "all", label: "Все камеры" }, { id: "online", label: "На связи" },
+  { id: "offline", label: "Нет связи" }, { id: "threats", label: "С тревогами" },
+];
 
 interface DashboardPageProps {
   onGlobalStatsUpdate: (stats: DashboardStats) => void;
@@ -12,23 +25,33 @@ interface DashboardPageProps {
   role: User["role"];
   permissions?: string[];
   displayMode?: boolean;
+  storageKey?: string;
 }
 
-export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdate, preferences, role, permissions = [], displayMode = false }) => {
+export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdate, preferences, role, permissions = [], displayMode = false, storageKey = "security:anonymous" }) => {
   const [cameras, setCameras] = useState<Camera[]>([]);
-  const [violations, setViolations] = useState<Violation[]>([]);
-
-  const [filterType, setFilterType] = useState("");
-  const [filterCameraId, setFilterCameraId] = useState<number | undefined>(undefined);
-  const [onlyUnack, setOnlyUnack] = useState(false);
-  const [reviewStatus, setReviewStatus] = useState("");
+  const surface = useRef<HTMLDivElement>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [monitorView, setMonitorView] = useState("wall");
+  const [local, setLocal] = useState<{ columns: number; pinned: number[]; autofocus: boolean }>(() => {
+    try { return readMonitoringState(localStorage.getItem(storageKey)); } catch { return readMonitoringState(null); }
+  });
+  useEffect(() => { try { localStorage.setItem(storageKey, JSON.stringify(local)); } catch { /* storage is optional */ } }, [local, storageKey]);
+  useEffect(() => { const sync = () => setFullscreen(document.fullscreenElement === surface.current); document.addEventListener("fullscreenchange", sync); return () => document.removeEventListener("fullscreenchange", sync); }, []);
+  const [cameraQuery, setCameraQuery] = useState("");
+  const [cameraFilter, setCameraFilter] = useState<CameraFilter>("all");
+  const [loaded, setLoaded] = useState(false);
+  const visibleCameras = filterCameras(cameras, cameraQuery, cameraFilter).sort((a, b) => Number(local.pinned.includes(b.id)) - Number(local.pinned.includes(a.id)));
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [expandedCamera, setExpandedCamera] = useState<Camera | null>(null);
+  const [settingsCamera, setSettingsCamera] = useState<Camera | null>(null);
   const [activeVideo, setActiveVideo] = useState<Violation | null>(null);
   const [latestAlert, setLatestAlert] = useState<Violation | null>(null);
-  const highestSeenId = useRef<number | null>(null);
+
   const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(false);
+  const fetching = useRef(false);
 
   useEffect(() => {
     if (!displayMode || !latestAlert) return;
@@ -47,47 +70,42 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
     } catch { /* Audio may be unavailable or blocked by the browser. */ }
   }, [displayMode, latestAlert]);
 
-  const fetchAll = useCallback(async () => {
-    try {
-      const [st, cams, viols] = await Promise.all([
-        api.getStats(),
-        api.getCameras(),
-        api.getViolations({
-          violation_type: filterType || undefined,
-          camera_id: filterCameraId,
-          review_status: reviewStatus || undefined,
-          unacknowledged_only: onlyUnack,
-        }),
-      ]);
-      onGlobalStatsUpdate(st);
-      setCameras(cams);
-      setViolations(viols);
-      setError(null);
-
-      if (viols.length > 0) {
-        const newest = viols[0];
-        if (highestSeenId.current !== null && newest.id > highestSeenId.current) {
-          setLatestAlert(newest);
-        }
-        if (highestSeenId.current === null || newest.id > highestSeenId.current) {
-          highestSeenId.current = newest.id;
-        }
+  useEffect(() => {
+    const receive = (event: Event) => {
+      const row = (event as CustomEvent<Violation>).detail;
+      setLatestAlert(row);
+      if (local.autofocus && !showAddModal && !expandedCamera && !settingsCamera && !activeVideo && !document.querySelector("dialog[open], [role=dialog]")) {
+        const camera = cameras.find(item => item.id === row.camera_id);
+        if (camera) setExpandedCamera(camera);
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Нет связи с сервером");
-    }
-  }, [filterType, filterCameraId, reviewStatus, onlyUnack, onGlobalStatsUpdate]);
+    };
+    window.addEventListener("incident-created", receive);
+    return () => window.removeEventListener("incident-created", receive);
+  }, [local.autofocus, cameras, showAddModal, expandedCamera, settingsCamera, activeVideo]);
+
+  const fetchAll = useCallback(async () => {
+    if (fetching.current) return;
+    fetching.current = true;
+    try {
+      const [st, cams] = await Promise.all([api.getStats(), api.getCameras()]);
+      if (!mounted.current) return;
+      onGlobalStatsUpdate(st); setCameras(cams); setLoaded(true); setError(null);
+    } catch (err) { if (mounted.current) setError(err instanceof Error ? err.message : "Нет связи с сервером"); }
+    finally { fetching.current = false; }
+  }, [onGlobalStatsUpdate]);
 
   useEffect(() => {
+    mounted.current = true;
     fetchAll();
     const timer = setInterval(fetchAll, 2500);
-    return () => clearInterval(timer);
+    return () => { mounted.current = false; clearInterval(timer); };
   }, [fetchAll]);
 
   const handleAcknowledge = async (id: number) => {
     try {
     const updated = await api.acknowledgeViolation(id);
-    setViolations((prev) => prev.map((v) => (v.id === id ? updated : v)));
+    window.dispatchEvent(new Event("incident-updated"));
+
     if (activeVideo && activeVideo.id === id) {
       setActiveVideo(updated);
     }
@@ -95,17 +113,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
     } catch (err) { setError(err instanceof Error ? err.message : "Ошибка подтверждения"); }
   };
 
-  const handleReview = async (id: number, status: Violation["review_status"], comment: string) => {
-    try {
-      const updated = await api.reviewViolation(id, status, comment);
-      setViolations((prev) => prev.map((v) => (v.id === id ? updated : v)));
-      if (activeVideo?.id === id) setActiveVideo(updated);
-      fetchAll();
-    } catch (err) { setError(err instanceof Error ? err.message : "Ошибка изменения статуса"); }
-  };
-
   return (
-    <div className="space-y-8">
+    <div ref={surface} className="space-y-8 guard-surface" style={{ "--guard-columns": local.columns } as React.CSSProperties}>
       {error && <p role="alert" className="rounded-xl border border-red-700 bg-red-950 p-4 text-sm text-red-200">{error}</p>}
       {latestAlert && preferences.show_alerts && (
         <div className="bg-red-950/80 border border-red-500/50 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4 shadow-lg">
@@ -149,9 +158,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
       <section className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className={displayMode ? "text-2xl font-semibold text-white" : "text-lg font-semibold text-white"}>Видеостена реального времени</h2>
+            <h2 className="monitoring-title">Видеостена</h2>
             {!displayMode && <p className="text-xs text-slate-400">
-              Потоковый мониторинг камер школы с автоматической классификацией объектов и проверкой бесхозных сумок
+              {cameras.filter(camera => camera.online).length} из {cameras.length} камер на связи. Откройте поток для просмотра крупным планом.
             </p>}
           </div>
 
@@ -159,13 +168,14 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
             {!displayMode && <button
               onClick={fetchAll}
               className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300 transition"
-              title="Обновить данные"
+               title="Обновить данные"
+               aria-label="Обновить данные камер"
             >
               <RefreshCw className="w-4 h-4" />
             </button>}
-            {role === "admin" && <button
+            {(role === "admin" || permissions.includes("manage_cameras")) && <button
               onClick={() => setShowAddModal(true)}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-sm font-medium text-white transition shadow-sm"
+              className="accent-button inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition shadow-sm"
             >
               <Plus className="w-4 h-4" />
               Добавить камеру
@@ -173,11 +183,22 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
           </div>
         </div>
 
-        <div className={`grid gap-5 ${ {1: "grid-cols-1", 2: "grid-cols-1 md:grid-cols-2", 3: "grid-cols-1 md:grid-cols-2 xl:grid-cols-3", 4: "grid-cols-1 md:grid-cols-2 xl:grid-cols-4"}[preferences.columns] }`}>
-          {cameras.length === 0 && <div className="col-span-full rounded-2xl border border-dashed border-slate-700 bg-slate-900 p-10 text-center"><h3 className="font-semibold">Камеры ещё не добавлены</h3><p className="text-sm text-slate-400 mt-2">{role === "admin" ? "Добавьте RTSP-камеру или тестовый источник, чтобы начать мониторинг." : "Попросите администратора подключить камеры."}</p></div>}
-          {cameras.map((cam) => (
-            <CameraCard
-              key={cam.id}
+        <div className="operations-toolbar">
+          <button aria-pressed={monitorView === "wall"} onClick={() => { if (monitorView !== "wall" && canLeaveWorkspace()) setMonitorView("wall"); }}>Видеостена</button><button aria-pressed={monitorView === "plan"} onClick={() => setMonitorView("plan")}>План</button>
+          <label>Раскладка<select value={local.columns} onChange={e => setLocal(old => ({ ...old, columns: Number(e.target.value) }))}><option value={1}>Крупно · 1</option><option value={2}>Стандарт · 2</option><option value={4}>Обзор · 4</option><option value={8}>Максимум · 8</option></select></label>
+          <label><input type="checkbox" checked={local.autofocus} onChange={e => setLocal(old => ({ ...old, autofocus: e.target.checked }))} />Автофокус новых тревог</label>
+          <button onClick={async () => { try { if (fullscreen) await document.exitFullscreen(); else await surface.current?.requestFullscreen(); } catch { setError("Полноэкранный режим недоступен в этом браузере"); } }}>{fullscreen ? "Выйти из режима охраны" : "Режим охраны · полный экран"}</button>
+        </div>
+        {monitorView === "plan" && <FloorPlans cameras={cameras} isAdmin={role === "admin"} onOpenCamera={setExpandedCamera} />}
+        <div hidden={monitorView !== "wall"}>
+        {!displayMode && <div className="camera-toolbar"><div className="camera-filter-tabs" role="group" aria-label="Фильтр состояния камер">{cameraFilters.map(({ id, label }) => <button type="button" key={id} aria-pressed={cameraFilter === id} onClick={() => setCameraFilter(id)}>{label}<span>{loaded ? cameras.filter(camera => matchesCameraFilter(camera, id)).length : "—"}</span></button>)}</div><label className="camera-search"><Search size={17} aria-hidden="true" /><input type="search" aria-label="Поиск камеры по названию или расположению" placeholder="Найти камеру или зону" value={cameraQuery} onChange={event => setCameraQuery(event.target.value)} /></label></div>}
+        {!displayMode && loaded && <p className="camera-result-count" role="status">Показано {visibleCameras.length} из {cameras.length}{error ? " · данные могут быть устаревшими" : ""}</p>}
+        <div className={`camera-wall-grid columns-${preferences.columns}`}>
+          {!loaded && <div className="camera-empty-state col-span-full"><CameraIcon size={30} aria-hidden="true" /><h3>{error ? "Не удалось загрузить камеры" : "Подключаемся к камерам…"}</h3><p>{error ? "Проверьте соединение с сервером и обновите данные." : "Получаем список источников и состояние видеопотоков."}</p></div>}
+          {loaded && cameras.length === 0 && <div className="camera-empty-state col-span-full"><CameraIcon size={30} aria-hidden="true" /><h3>Здесь появятся камеры школы</h3><p>{role === "admin" || permissions.includes("manage_cameras") ? "Подключите камеру объекта или тестовый источник." : "Попросите администратора подключить камеры."}</p>{(role === "admin" || permissions.includes("manage_cameras")) && <button className="accent-button" onClick={() => setShowAddModal(true)}><Plus size={16} aria-hidden="true" />Добавить первую камеру</button>}</div>}
+          {loaded && cameras.length > 0 && visibleCameras.length === 0 && <div className="camera-empty-state col-span-full"><Search size={30} aria-hidden="true" /><h3>Камер с такими параметрами нет</h3><p>Попробуйте другое название, расположение или состояние.</p><button className="quiet-button" onClick={() => { setCameraQuery(""); setCameraFilter("all"); }}>Сбросить фильтры</button></div>}
+          {visibleCameras.map((cam) => (
+            <div className="camera-pin-wrap" key={cam.id}><button className="camera-pin" aria-pressed={local.pinned.includes(cam.id)} aria-label={`Закрепить камеру ${cam.name}`} onClick={() => setLocal(old => ({ ...old, pinned: old.pinned.includes(cam.id) ? old.pinned.filter(id => id !== cam.id) : [...old.pinned, cam.id] }))}>{local.pinned.includes(cam.id) ? "★ Закреплена" : "☆ Закрепить"}</button><CameraCard
               camera={cam}
               canManage={role === "admin" || permissions.includes("manage_cameras")}
               onReconnect={async id => { try { await api.reconnectCamera(id); fetchAll(); } catch (err) { setError(err instanceof Error ? err.message : "Ошибка переподключения"); } }}
@@ -200,36 +221,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
                 } catch (err) { setError(err instanceof Error ? err.message : "Ошибка симуляции"); }
               }}
               onExpand={setExpandedCamera}
-            />
+              onSettings={role === "admin" && !displayMode ? setSettingsCamera : undefined}
+            /></div>
           ))}
-        </div>
+        </div></div>
       </section>
 
-      {!displayMode && preferences.show_archive && <ViolationsTable
-         canAcknowledge={role === "admin" || permissions.includes("review_incidents")}
-         canDelete={role === "admin" || permissions.includes("manage_cameras")}
-        violations={violations}
-        cameras={cameras}
-        filterType={filterType}
-        filterCameraId={filterCameraId}
-        onlyUnack={onlyUnack}
-        reviewStatus={reviewStatus}
-        onChangeType={setFilterType}
-        onChangeCamera={setFilterCameraId}
-        onChangeUnack={setOnlyUnack}
-        onChangeReviewStatus={setReviewStatus}
-        onOpenVideo={setActiveVideo}
-        onAcknowledge={handleAcknowledge}
-        onReview={handleReview}
-        onDelete={async (id) => {
-          if (!window.confirm("Удалить инцидент и его медиафайлы?")) return;
-          try {
-          await api.deleteViolation(id);
-          fetchAll();
-          } catch (err) { setError(err instanceof Error ? err.message : "Ошибка удаления инцидента"); }
-         }}
-         onExport={() => api.exportViolations({ violation_type: filterType || undefined, camera_id: filterCameraId, review_status: reviewStatus || undefined, unacknowledged_only: onlyUnack }).catch(err => setError(err instanceof Error ? err.message : "Ошибка экспорта архива"))}
-       />}
+      {!displayMode && preferences.show_archive && <ArchiveBrowser key={storageKey} cameras={cameras} storageKey={storageKey} onOpenVideo={setActiveVideo} canExport={role === "admin" || permissions.includes("export_archive")} canReview={role === "admin" || permissions.includes("review_incidents")} canDelete={role === "admin" || permissions.includes("delete_incidents")} />}
 
       <AddCameraModal
         open={showAddModal}
@@ -247,29 +245,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onGlobalStatsUpdat
         onAcknowledge={handleAcknowledge}
       />
 
-      {expandedCamera && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-5xl w-full p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-semibold text-white">{expandedCamera.name}</h3>
-                <p className="text-xs text-slate-400">{expandedCamera.location}</p>
-              </div>
-              <button
-                onClick={() => setExpandedCamera(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <img
-              src={`/api/cameras/${expandedCamera.id}/stream`}
-              alt={expandedCamera.name}
-              className="w-full rounded-xl bg-black aspect-video object-contain"
-            />
-          </div>
-        </div>
-      )}
+      {expandedCamera && <CameraViewer camera={cameras.find(camera => camera.id === expandedCamera.id) ?? expandedCamera} onClose={() => setExpandedCamera(null)} />}
+      {settingsCamera && role === "admin" && <CameraSettingsDialog camera={settingsCamera} onClose={() => setSettingsCamera(null)} onSaved={() => { void fetchAll(); }} />}
     </div>
   );
 };

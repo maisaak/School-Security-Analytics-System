@@ -12,6 +12,8 @@ from app.api.employees import router as employees_router
 from app.api.roles import router as roles_router
 from app.api.settings import router as settings_router, MODEL_CATALOG
 from app.api.diagnostics import router as diagnostics_router
+from app.api.updates import router as updates_router
+from app.api.monitoring import router as monitoring_router
 from app.core.config import settings
 from app.core.security import verify_api_key
 from app.db.models import AppSetting, AuditLog, Camera, RetrainJob
@@ -46,10 +48,24 @@ def _seed_initial_state() -> None:
     try:
         _ensure_compatibility_columns()
         saved_model = db.get(AppSetting, "base_model")
+        from app.api import settings as settings_api
+        from app.services.incident_recording import RecordingSettings
+        recording = db.get(AppSetting, "incident_recording")
+        settings_api.recording_settings = RecordingSettings.model_validate_json(recording.value) if recording else RecordingSettings()
+        stream_manager.configure_recording(settings_api.recording_settings)
         if saved_model and saved_model.value in {e["filename"] for e in MODEL_CATALOG.values()}:
             target = PROJECT_ROOT / "ml" / "models" / saved_model.value
             if target.is_file():
                 detector.select_base_model(target)
+        thresholds = db.get(AppSetting, "detection_thresholds")
+        if thresholds:
+            try:
+                values = __import__("json").loads(thresholds.value)
+                settings.CONFIDENCE_THRESHOLD = float(values.get("confidence", settings.CONFIDENCE_THRESHOLD))
+                settings.WEAPON_CONFIDENCE_THRESHOLD = float(values.get("weapon_confidence", settings.WEAPON_CONFIDENCE_THRESHOLD))
+                settings.CUSTOM_CONFIDENCE_THRESHOLD = float(values.get("custom_confidence", settings.CUSTOM_CONFIDENCE_THRESHOLD))
+            except (TypeError, ValueError, KeyError):
+                pass
         if settings.SEED_DEMO_CAMERAS and db.query(Camera).count() == 0:
             for item in DEFAULT_CAMERAS:
                 db.add(Camera(**item, is_active=True))
@@ -62,7 +78,7 @@ def _seed_initial_state() -> None:
         db.commit()
 
         for cam in db.query(Camera).all():
-            stream_manager.start_camera(cam.id, cam.name, cam.rtsp_url, is_active=cam.is_active)
+            stream_manager.start_camera(cam.id, cam.name, cam.rtsp_url, is_active=cam.is_active, target_fps=cam.target_fps, jpeg_quality=cam.jpeg_quality, detect_every=cam.detect_every)
     finally:
         db.close()
 
@@ -70,6 +86,12 @@ def _seed_initial_state() -> None:
 def _ensure_compatibility_columns() -> None:
     """Small SQLite/PostgreSQL migration for installations created before review workflow."""
     inspector = inspect(engine)
+    if "cameras" in inspector.get_table_names():
+        columns = {column["name"] for column in inspector.get_columns("cameras")}
+        with engine.begin() as connection:
+            for name, default in {"target_fps": 12, "jpeg_quality": 82, "detect_every": 3}.items():
+                if name not in columns:
+                    connection.execute(text(f"ALTER TABLE cameras ADD COLUMN {name} INTEGER NOT NULL DEFAULT {default}"))
     if "violations" not in inspector.get_table_names():
         return
     existing = {column["name"] for column in inspector.get_columns("violations")}
@@ -83,6 +105,12 @@ def _ensure_compatibility_columns() -> None:
         for name, definition in additions.items():
             if name not in existing:
                 connection.execute(text(f"ALTER TABLE violations ADD COLUMN {name} {definition}"))
+    if "employees" in inspector.get_table_names():
+        existing = {column["name"] for column in inspector.get_columns("employees")}
+        with engine.begin() as connection:
+            for name, definition in {"totp_secret": "VARCHAR(64)", "totp_enabled": "BOOLEAN NOT NULL DEFAULT FALSE", "totp_pending_secret": "VARCHAR(64)", "totp_pending_expires": "INTEGER", "totp_last_counter": "INTEGER"}.items():
+                if name not in existing:
+                    connection.execute(text(f"ALTER TABLE employees ADD COLUMN {name} {definition}"))
 
 
 @asynccontextmanager
@@ -110,6 +138,7 @@ app = FastAPI(
     description="Система видеомониторинга школьной безопасности с детекцией угроз через YOLOv8",
     lifespan=lifespan,
 )
+app.include_router(monitoring_router)
 
 
 @app.middleware("http")
@@ -149,6 +178,7 @@ app.include_router(employees_router)
 app.include_router(roles_router)
 app.include_router(settings_router)
 app.include_router(diagnostics_router)
+app.include_router(updates_router)
 
 
 @app.get("/media/{media_path:path}", dependencies=[Depends(verify_api_key)])

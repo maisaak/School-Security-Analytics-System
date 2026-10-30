@@ -12,11 +12,24 @@ class CameraCreate(BaseModel):
     rtsp_url: str = Field(..., min_length=3, max_length=512, examples=["sim://hallway"])
 
 
+class CameraSettings(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    name: str = Field(min_length=2, max_length=120)
+    location: str = Field(max_length=160)
+    rtsp_url: str | None = Field(default=None, min_length=3, max_length=512)
+    target_fps: int = Field(default=12, ge=1, le=30)
+    jpeg_quality: int = Field(default=82, ge=40, le=95)
+    detect_every: int = Field(default=3, ge=1, le=10)
+
+
 class CameraOut(BaseModel):
     id: int
     name: str
     location: str
     rtsp_url: str
+    target_fps: int = 12
+    jpeg_quality: int = 82
+    detect_every: int = 3
     is_active: bool
     created_at: datetime
     online: bool = False

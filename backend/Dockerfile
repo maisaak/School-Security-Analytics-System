@@ -10,7 +10,7 @@ WORKDIR /app/backend
 
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt \
-    && pip uninstall -y opencv-python || true \
+    && pip uninstall -y opencv-python \
     && pip install --no-cache-dir --force-reinstall --no-deps opencv-python-headless
 
 COPY backend/app /app/backend/app

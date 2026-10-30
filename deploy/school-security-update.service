@@ -1,0 +1,9 @@
+[Unit]
+Description=Check and install School Security updates
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/school-security-update
+TimeoutStartSec=3600
+UMask=0022

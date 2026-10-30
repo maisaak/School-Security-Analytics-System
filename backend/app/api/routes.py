@@ -5,6 +5,7 @@ import json
 import shutil
 import threading
 import uuid
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -12,13 +13,14 @@ import cv2
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from csv import writer
-from io import StringIO
+from io import BytesIO, StringIO
 from sqlalchemy.orm import Session
 
-from app.api.schemas import CameraCreate, CameraOut, RetrainJobOut, RetrainRequest, SimulateRequest, ViolationOut, ViolationReview
+from app.api.schemas import CameraCreate, CameraOut, CameraSettings, RetrainJobOut, RetrainRequest, SimulateRequest, ViolationOut, ViolationReview
+from app.api.archive_filters import archive_filters, apply_archive_filters, csv_cell
 from app.core.config import PROJECT_ROOT, settings
 from app.core.security import read_upload_sync, redact_stream_url, safe_delete_media_file, validate_dataset_yaml, validate_stream_source, verify_api_key, require_admin, require_permission
-from app.db.models import AuditLog, Camera, RetrainJob, Violation
+from app.db.models import AppSetting, AuditLog, Camera, RetrainJob, Violation
 from app.db.session import get_db
 from app.models.detector import detector
 from app.services.media_analysis import analyze_media, decode_image
@@ -34,7 +36,7 @@ DATASET_LOCK = threading.Lock()
 
 
 def _serialize_camera(cam: Camera) -> CameraOut:
-    return CameraOut(id=cam.id, name=cam.name, location=cam.location, rtsp_url=redact_stream_url(cam.rtsp_url), is_active=cam.is_active, created_at=cam.created_at, **stream_manager.get_telemetry(cam.id))
+    return CameraOut(id=cam.id, name=cam.name, location=cam.location, rtsp_url=redact_stream_url(cam.rtsp_url), target_fps=cam.target_fps, jpeg_quality=cam.jpeg_quality, detect_every=cam.detect_every, is_active=cam.is_active, created_at=cam.created_at, **stream_manager.get_telemetry(cam.id))
 
 
 def _serialize_violation(v: Violation) -> ViolationOut:
@@ -94,8 +96,25 @@ def reconnect_camera(camera_id: int, db: Session = Depends(get_db)):
     if not cam or cam.rtsp_url == "lab://uploads":
         raise HTTPException(status_code=404, detail="Камера не найдена")
     stream_manager.stop_camera(camera_id)
-    stream_manager.start_camera(cam.id, cam.name, cam.rtsp_url, is_active=cam.is_active)
+    stream_manager.start_camera(cam.id, cam.name, cam.rtsp_url, is_active=cam.is_active, target_fps=cam.target_fps, jpeg_quality=cam.jpeg_quality, detect_every=cam.detect_every)
     return _serialize_camera(cam)
+
+
+@router.put("/cameras/{camera_id}/settings", response_model=CameraOut, dependencies=[Depends(require_admin)])
+def update_camera_settings(camera_id: int, payload: CameraSettings, db: Session = Depends(get_db)):
+    with CAMERA_LOCK:
+        cam = db.get(Camera, camera_id)
+        if not cam or cam.rtsp_url == "lab://uploads":
+            raise HTTPException(status_code=404, detail="Камера не найдена")
+        # Missing URL preserves credentials; never feed the redacted list URL back to capture.
+        source = validate_stream_source(payload.rtsp_url) if payload.rtsp_url is not None else cam.rtsp_url
+        stream_manager.stop_camera(cam.id)
+        for key in ("name", "location", "target_fps", "jpeg_quality", "detect_every"):
+            setattr(cam, key, getattr(payload, key))
+        cam.rtsp_url = source
+        db.commit()
+        stream_manager.start_camera(cam.id, cam.name, cam.rtsp_url, is_active=cam.is_active, target_fps=cam.target_fps, jpeg_quality=cam.jpeg_quality, detect_every=cam.detect_every)
+        return _serialize_camera(cam)
 
 
 @router.post("/cameras/{camera_id}/simulate")
@@ -113,6 +132,16 @@ def delete_camera(camera_id: int, db: Session = Depends(get_db)):
     stream_manager.stop_camera(camera_id)
     _delete_incidents(list(cam.violations), db)
     db.expire(cam, ["violations"])
+    # Cleanup in the same transaction: SQLite can reuse the deleted camera ID.
+    rule = db.get(AppSetting, f"camera_rules:{camera_id}")
+    if rule:
+        db.delete(rule)
+    registry = db.get(AppSetting, "floor_plans")
+    if registry:
+        items = json.loads(registry.value)
+        for item in items:
+            item["placements"] = [p for p in item["placements"] if p["camera_id"] != camera_id]
+        registry.value = json.dumps(items)
     db.delete(cam)
     db.commit()
     return Response(status_code=204)
@@ -143,34 +172,60 @@ async def stream_camera(camera_id: int, request: Request):
 
 
 @router.get("/violations", response_model=list[ViolationOut])
-def list_violations(violation_type: str | None = None, camera_id: int | None = None, review_status: str | None = None, unacknowledged_only: bool = False, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
-    query = db.query(Violation)
-    if violation_type:
-        query = query.filter(Violation.violation_type == violation_type)
-    if camera_id is not None:
-        query = query.filter(Violation.camera_id == camera_id)
-    if review_status:
-        if review_status not in {"new", "in_review", "confirmed", "false_alarm", "closed"}:
-            raise HTTPException(status_code=422, detail="Неизвестный статус проверки")
-        query = query.filter(Violation.review_status == review_status)
-    if unacknowledged_only:
-        query = query.filter(Violation.is_acknowledged.is_(False))
+def list_violations(filters: dict = Depends(archive_filters), limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
+    query = apply_archive_filters(db.query(Violation), filters)
     return [_serialize_violation(v) for v in query.order_by(Violation.detected_at.desc(), Violation.id.desc()).offset(offset).limit(limit).all()]
 
 
 @router.get("/violations/export.csv", dependencies=[Depends(require_permission("export_archive"))])
-def export_violations_csv(violation_type: str | None = None, camera_id: int | None = None, review_status: str | None = None, unacknowledged_only: bool = False, db: Session = Depends(get_db)):
-    query = db.query(Violation)
-    if violation_type: query = query.filter(Violation.violation_type == violation_type)
-    if camera_id is not None: query = query.filter(Violation.camera_id == camera_id)
-    if review_status: query = query.filter(Violation.review_status == review_status)
-    if unacknowledged_only: query = query.filter(Violation.is_acknowledged.is_(False))
+def export_violations_csv(filters: dict = Depends(archive_filters), db: Session = Depends(get_db)):
+    query = apply_archive_filters(db.query(Violation), filters)
     output = StringIO()
     csv = writer(output)
     csv.writerow(["ID", "Тип угрозы", "Камера", "Зона", "Уверенность", "Статус", "Подтверждено", "Комментарий", "Время"])
-    for row in query.order_by(Violation.detected_at.desc(), Violation.id.desc()).limit(5000).all():
-        csv.writerow([row.id, row.violation_type, row.camera.name if row.camera else "Архив", row.camera.location if row.camera else "Архив", f"{row.confidence:.4f}", row.review_status, "да" if row.is_acknowledged else "нет", row.review_comment or "", row.detected_at.isoformat()])
+    rows = query.order_by(Violation.detected_at.desc(), Violation.id.desc()).limit(5001).all()
+    if len(rows) > 5000:
+        raise HTTPException(413, "Для CSV сузьте период до 5000 событий")
+    for row in rows:
+        csv.writerow([csv_cell(value) for value in [row.id, row.violation_type, row.camera.name if row.camera else "Архив", row.camera.location if row.camera else "Архив", f"{row.confidence:.4f}", row.review_status, "да" if row.is_acknowledged else "нет", row.review_comment or "", row.detected_at.isoformat()]])
     return Response(output.getvalue().encode("utf-8-sig"), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=violations.csv", "Cache-Control": "private, no-store"})
+
+
+@router.get("/violations/export.zip", dependencies=[Depends(require_permission("export_archive"))])
+def export_violations_zip(filters: dict = Depends(archive_filters), db: Session = Depends(get_db)):
+    query = apply_archive_filters(db.query(Violation), filters)
+    rows = query.order_by(Violation.detected_at.desc(), Violation.id.desc()).limit(501).all()
+    if len(rows) > 500:
+        raise HTTPException(413, "Для ZIP выберите не более 500 событий или сузьте период")
+    media = {}
+    root = settings.MEDIA_ROOT.resolve()
+    for row in rows:
+        for path, folder in ((row.image_path, "images"), (row.video_path, "videos")):
+            if not path or not path.startswith("/media/"):
+                continue
+            target = (root / path.removeprefix("/media/")).resolve()
+            if target.is_relative_to(root) and target.is_file():
+                media[target] = f"{folder}/{target.name}"
+    if sum(target.stat().st_size for target in media) > 64 * 1024 * 1024:
+        raise HTTPException(413, "ZIP превышает 64 МБ исходных медиафайлов. Выберите меньше событий")
+    archive = BytesIO()
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+        csv_text = StringIO(); csv = writer(csv_text); csv.writerow(["ID", "Тип", "Камера", "Зона", "Уверенность", "Статус", "Время"])
+        for row in rows:
+            csv.writerow([csv_cell(value) for value in [row.id, row.violation_type, row.camera.name if row.camera else "Архив", row.camera.location if row.camera else "Архив", row.confidence, row.review_status, row.detected_at.isoformat()]])
+        remaining = 64 * 1024 * 1024
+        for target, name in media.items():
+            try:
+                with target.open("rb") as source:
+                    content = source.read(remaining + 1)
+            except FileNotFoundError:
+                continue  # Retention may remove media while the export is being prepared.
+            if len(content) > remaining:
+                raise HTTPException(413, "ZIP превышает лимит 64 МБ. Выберите меньше событий")
+            remaining -= len(content)
+            bundle.writestr(name, content)
+        bundle.writestr("violations.csv", csv_text.getvalue().encode("utf-8-sig"))
+    return Response(archive.getvalue(), media_type="application/zip", headers={"Content-Disposition": "attachment; filename=violations.zip", "Cache-Control": "private, no-store"})
 
 
 @router.patch("/violations/{violation_id}/ack", response_model=ViolationOut)

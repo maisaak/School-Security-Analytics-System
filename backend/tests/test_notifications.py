@@ -31,3 +31,26 @@ def test_notification_cooldown_deduplicates(monkeypatch):
     notifications.notify_incident("dog", "Entrance", 0.9)
     notifications.notify_incident("weapon", "Entrance", 0.9)
     assert len(called) == 2
+
+
+def test_camera_cooldowns_are_independent(monkeypatch):
+    monkeypatch.setattr(notifications, "_last_sent", {})
+    monkeypatch.setattr(notifications.time, "monotonic", lambda: 1)
+    assert notifications._allowed("dog", "Entrance")
+    assert notifications._allowed("dog", "Courtyard")
+    assert not notifications._allowed("dog", "Entrance")
+
+
+def test_telegram_failure_does_not_block_webhook_or_leak_secrets(monkeypatch, caplog):
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "private-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "chat")
+    monkeypatch.setattr(settings, "NOTIFICATION_WEBHOOK_URL", "https://example.invalid/private-hook")
+    calls = []
+    def send(url, *args):
+        calls.append(url)
+        if "telegram" in url:
+            raise RuntimeError("private-token private-hook")
+    monkeypatch.setattr(notifications, "_send", send)
+    notifications._safe_deliver("dog", "Entrance", .9)
+    assert len(calls) == 2
+    assert "private-token" not in caplog.text and "private-hook" not in caplog.text

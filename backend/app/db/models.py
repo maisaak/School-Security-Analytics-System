@@ -18,6 +18,9 @@ class Camera(Base):
     name = Column(String(120), nullable=False)
     location = Column(String(160), default="Главный вход")
     rtsp_url = Column(String(512), nullable=False)
+    target_fps = Column(Integer, nullable=False, default=12)
+    jpeg_quality = Column(Integer, nullable=False, default=82)
+    detect_every = Column(Integer, nullable=False, default=3)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
@@ -70,6 +73,11 @@ class Employee(Base):
     password_hash = Column(Text, nullable=False)
     role = Column(String(20), nullable=False, default="viewer")
     is_active = Column(Boolean, nullable=False, default=True)
+    totp_secret = Column(String(64), nullable=True)
+    totp_enabled = Column(Boolean, nullable=False, default=False)
+    totp_pending_secret = Column(String(64), nullable=True)
+    totp_pending_expires = Column(Integer, nullable=True)
+    totp_last_counter = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 

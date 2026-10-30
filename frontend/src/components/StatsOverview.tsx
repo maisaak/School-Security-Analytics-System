@@ -51,7 +51,7 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats, detailed = 
         {cards.map(({ title, value, sub, icon: Icon, accent }) => (
           <div
             key={title}
-            className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 flex items-start justify-between gap-3"
+            className="metric-card bg-slate-900/90 border border-slate-800 rounded-2xl p-4 flex items-start justify-between gap-3"
           >
             <div>
               <p className="text-xs font-medium text-slate-400">{title}</p>
@@ -59,7 +59,7 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats, detailed = 
               <p className="text-xs text-slate-500 mt-1">{sub}</p>
             </div>
             <div className={`p-2.5 rounded-xl border ${accent}`}>
-              <Icon className="w-5 h-5" />
+              <Icon className="w-5 h-5" aria-hidden="true" />
             </div>
           </div>
         ))}

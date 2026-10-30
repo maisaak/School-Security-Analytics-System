@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     NOTIFICATION_WEBHOOK_URL: str = ""
     NOTIFICATION_COOLDOWN_SEC: int = 60
     NOTIFICATION_TIMEOUT_SEC: int = 5
+    SERVER_UPDATES_ENABLED: bool = False
+    SERVER_UPDATE_STATE_DIR: Path = Path("/var/lib/school-security-updater")
 
     model_config = SettingsConfigDict(
         env_file=str(PROJECT_ROOT / ".env"),
